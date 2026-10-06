@@ -1,5 +1,5 @@
-// Lernen: session setup (filter sheet), the one-handed learning session and
-// the session summary.
+// Lernen: session setup (decks, filters, order), the one-handed learning
+// session and the session summary.
 //
 // Ratings go to sync.submitReview().  Cloud mode: the learning engine
 // (js/core/engine.js, identical to the desktop's) applies them right away on
@@ -11,7 +11,9 @@ import { isCloud } from '../config.js';
 import { cardImages, thumbGrid } from '../images.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
-import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast, toggle } from '../ui.js';
+import { DEFAULT_ORDER, orderSessionCards } from '../core/selection.js';
+import { countIndex, deckSummary, fillCategorySelect, fillSubcategorySelect, normalizeDeckIds, openDeckPicker } from '../pickers.js';
+import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast } from '../ui.js';
 import { clear, h, icon, plural, pointsText, uuid } from '../util.js';
 
 const LIMITS = [
@@ -21,40 +23,56 @@ const LIMITS = [
   { value: '50', label: '50' },
   { value: 'all', label: 'Alle' },
 ];
+export const ORDERS = [
+  { value: 'mixed', label: 'Gemischt', sub: 'Decks und Karten zufällig mischen' },
+  { value: 'due', label: 'Fälligkeit zuerst', sub: 'Überfällige Karten zuerst' },
+  { value: 'level_asc', label: 'Level aufsteigend', sub: 'Schwächere Karten zuerst' },
+  { value: 'level_desc', label: 'Level absteigend', sub: 'Stärkere Karten zuerst' },
+];
 const MAX_RETRIES_PER_CARD = 3;
 
-export const filters = { deckId: '', categoryId: '', subcategoryId: '', dueOnly: true, limit: '20' };
+// The setup's selection: local UI state of this device, never synchronised.
+// deckIds [] = all decks.  `preset` holds the exact card set handed over by
+// the card list ("Diese Karten lernen") until it is changed or used.
+export const filters = { deckIds: [], categoryId: '', subcategoryId: '', dueOnly: true, limit: '20', order: DEFAULT_ORDER, preset: null };
 
 let session = null;
-let pendingSheetPreset = null;
 let navigateRef = null;
 
 function vibrate(pattern) {
   try { if (navigator.vibrate) navigator.vibrate(pattern); } catch { /* not supported */ }
 }
 
+function randomSeed() {
+  try { return crypto.getRandomValues(new Uint32Array(1))[0]; } catch { return Math.floor(Math.random() * 4294967296); }
+}
+
 // -- selection -----------------------------------------------------------------
 function selectionPayload(values) {
   return {
-    deck_ids: values.deckId ? [values.deckId] : [],
+    deck_ids: [...values.deckIds],
     category_ids: values.categoryId ? [values.categoryId] : [],
     subcategory_ids: values.subcategoryId ? [values.subcategoryId] : [],
     due_only: values.dueOnly,
     include_mastered: false,
-    limit: values.limit === 'all' ? null : Number(values.limit),
+    // The order applies to the whole candidate list; the limit comes after it.
+    limit: null,
   };
 }
 
-function localCount(values) {
+function localCandidates(values) {
+  if (values.preset) return values.preset.cardIds.map((id) => store.card(id)).filter(Boolean);
+  const payload = selectionPayload(values);
   return store.localSelection({
-    deckIds: values.deckId ? [values.deckId] : [],
-    categoryIds: values.categoryId ? [values.categoryId] : [],
-    subcategoryIds: values.subcategoryId ? [values.subcategoryId] : [],
-    dueOnly: values.dueOnly,
-  }).length;
+    deckIds: payload.deck_ids,
+    categoryIds: payload.category_ids,
+    subcategoryIds: payload.subcategory_ids,
+    dueOnly: payload.due_only,
+  });
 }
 
-async function selectCards(values) {
+async function candidateIds(values) {
+  if (values.preset) return values.preset.cardIds.filter((id) => store.card(id));
   try {
     const result = await api.post('/api/sessions/select', selectionPayload(values), { timeout: 10000 });
     let ids = result.card_ids || [];
@@ -66,18 +84,19 @@ async function selectCards(values) {
   } catch (error) {
     if (!(error instanceof NetworkError)) throw error;
     // Offline (server mode): same documented selection rule on the local copy.
-    const payload = selectionPayload(values);
-    return store.localSelection({
-      deckIds: payload.deck_ids,
-      categoryIds: payload.category_ids,
-      subcategoryIds: payload.subcategory_ids,
-      dueOnly: payload.due_only,
-      limit: payload.limit,
-    }).map((card) => card.id);
+    return localCandidates(values).map((card) => card.id);
   }
 }
 
-export function startWithIds(ids, navigate) {
+/** The session's cards: every candidate in the chosen order, then the limit. */
+export function arrangeSession(ids, { order = DEFAULT_ORDER, limit = 'all', seed = 0, now = Date.now() } = {}) {
+  const cards = [...new Set(ids)].map((id) => store.card(id)).filter(Boolean);
+  const ordered = orderSessionCards(cards, order, { seed, now });
+  const count = limit === 'all' || limit === null || limit === undefined ? ordered.length : Math.max(0, Number(limit));
+  return ordered.slice(0, count).map((card) => card.id);
+}
+
+export function startWithIds(ids, navigate, config = null) {
   const unique = [...new Set(ids)].filter((id) => store.card(id));
   if (!unique.length) {
     toast('Für diese Auswahl sind keine Karten verfügbar.');
@@ -95,10 +114,24 @@ export function startWithIds(ids, navigate) {
     retries: new Map(),
     finished: false,
     leaving: null,
+    // Frozen at the start: later syncs neither re-sort the queue nor add cards.
+    config: config ? Object.freeze({ ...config, deckIds: Object.freeze([...(config.deckIds || [])]) }) : null,
   };
   prefetchImages(unique);
   (navigate || navigateRef)('#/lernen/session');
   return true;
+}
+
+/** Read-only view of the running session (diagnostics and tests). */
+export function sessionInfo() {
+  if (!session) return null;
+  return {
+    ids: session.queue.map((entry) => entry.id),
+    retry: session.queue.map((entry) => entry.retry),
+    index: session.index,
+    finished: session.finished,
+    config: session.config,
+  };
 }
 
 // Make every image of the session available up front, so it survives a
@@ -115,12 +148,30 @@ function prefetchImages(ids) {
 async function startFromFilters(values, navigate, button) {
   if (button) button.disabled = true;
   try {
-    const ids = await selectCards(values);
-    if (!ids.length) {
-      toast(values.dueOnly ? 'Keine fälligen Karten für diese Auswahl.' : 'Keine Karten für diese Auswahl.');
+    const ids = await candidateIds(values);
+    const seed = randomSeed();
+    const now = Date.now();
+    const chosen = arrangeSession(ids, { order: values.order, limit: values.limit, seed, now });
+    if (!chosen.length) {
+      toast(values.dueOnly && !values.preset ? 'Keine fälligen Karten für diese Auswahl.' : 'Keine Karten für diese Auswahl.');
       return false;
     }
-    return startWithIds(ids, navigate);
+    const config = {
+      deckIds: values.deckIds,
+      categoryId: values.categoryId,
+      subcategoryId: values.subcategoryId,
+      dueOnly: values.dueOnly,
+      limit: values.limit,
+      order: values.order,
+      seed,
+      startedAt: new Date(now).toISOString(),
+      fromCardList: Boolean(values.preset),
+      candidates: ids.length,
+    };
+    const ok = startWithIds(chosen, navigate, config);
+    // The handed-over card set is used once; afterwards the filters apply.
+    if (ok) values.preset = null;
+    return ok;
   } catch (error) {
     toast(error.message || 'Session konnte nicht gestartet werden.', { tone: 'error' });
     return false;
@@ -129,135 +180,196 @@ async function startFromFilters(values, navigate, button) {
   }
 }
 
-// -- filter sheet ----------------------------------------------------------------
-export function openLearnSheet(preset = {}) {
-  pendingSheetPreset = preset;
-  if (navigateRef && location.hash === '#/lernen') {
-    const values = pendingSheetPreset;
-    pendingSheetPreset = null;
-    showFilterSheet(values, navigateRef);
+// -- setup ---------------------------------------------------------------------
+function applyPreset(preset = {}) {
+  if (preset.deckIds !== undefined || preset.deckId !== undefined) {
+    filters.deckIds = normalizeDeckIds(preset.deckIds || (preset.deckId ? [preset.deckId] : []));
+    filters.categoryId = '';
+    filters.subcategoryId = '';
   }
+  if (preset.categoryId !== undefined) filters.categoryId = preset.categoryId || '';
+  if (preset.subcategoryId !== undefined) filters.subcategoryId = preset.subcategoryId || '';
+  if (preset.dueOnly !== undefined) filters.dueOnly = Boolean(preset.dueOnly);
+  if (preset.limit !== undefined) filters.limit = String(preset.limit);
+  if (preset.order !== undefined && ORDERS.some((item) => item.value === preset.order)) filters.order = preset.order;
+  filters.preset = Array.isArray(preset.cardIds)
+    ? { cardIds: [...new Set(preset.cardIds)], label: preset.label || '' }
+    : null;
 }
 
-function showFilterSheet(preset, navigate, onApplied) {
-  const values = { ...filters, ...Object.fromEntries(Object.entries(preset).filter(([, value]) => value !== undefined)) };
-  if (preset.deckId !== undefined && preset.deckId !== filters.deckId) {
-    values.categoryId = '';
-    values.subcategoryId = '';
-  }
-  const deckSelect = select([], '', { id: 'filter-deck' });
-  const categorySelect = select([], '', { id: 'filter-category' });
-  const subcategorySelect = select([], '', { id: 'filter-subcategory' });
-  const due = toggle('Nur fällige Karten', values.dueOnly, { id: 'filter-due' });
-  const countText = h('p', { class: 'form-info', id: 'filter-count', 'aria-live': 'polite' });
+/** Prefill the session setup (start page, card list) and show it. */
+export function openLearnSetup(preset = {}, navigate = navigateRef) {
+  applyPreset(preset);
+  (navigate || navigateRef)('#/lernen');
+}
 
-  const fill = (element, options, value) => {
-    clear(element);
-    for (const option of options) element.append(h('option', { value: option.value, text: option.label }));
-    element.value = options.some((option) => option.value === value) ? value : '';
-  };
-  const refresh = () => {
-    fill(deckSelect, [{ value: '', label: 'Alle Decks' }, ...store.decks().map((deck) => ({ value: deck.id, label: deck.name }))], values.deckId);
-    values.deckId = deckSelect.value;
-    const categories = store.categoriesOf(values.deckId || null);
-    fill(categorySelect, [{ value: '', label: 'Alle Kategorien' }, ...categories.map((item) => ({ value: item.id, label: values.deckId ? item.name : `${item.name} · ${store.deck(item.deck_id)?.name || ''}` }))], values.categoryId);
-    values.categoryId = categorySelect.value;
-    const subcategories = values.categoryId ? store.subcategoriesOf(values.categoryId) : [];
-    fill(subcategorySelect, [{ value: '', label: 'Alle Unterkategorien' }, ...subcategories.map((item) => ({ value: item.id, label: item.name }))], values.subcategoryId);
-    subcategorySelect.disabled = !values.categoryId;
-    values.subcategoryId = subcategorySelect.value;
-    const available = localCount(values);
-    const planned = values.limit === 'all' ? available : Math.min(available, Number(values.limit));
-    countText.textContent = available
-      ? `${plural(available, 'Karte passt', 'Karten passen')} – die Session enthält ${plural(planned, 'Karte', 'Karten')}.`
-      : (values.dueOnly ? 'Keine fälligen Karten in dieser Auswahl.' : 'Keine Karten in dieser Auswahl.');
-  };
-  deckSelect.addEventListener('change', () => { values.deckId = deckSelect.value; values.categoryId = ''; values.subcategoryId = ''; refresh(); });
-  categorySelect.addEventListener('change', () => { values.categoryId = categorySelect.value; values.subcategoryId = ''; refresh(); });
-  subcategorySelect.addEventListener('change', () => { values.subcategoryId = subcategorySelect.value; refresh(); });
-  due.input.addEventListener('change', () => { values.dueOnly = due.input.checked; refresh(); });
-  refresh();
+function radioPill({ name, value, label, checked, id, onChange }) {
+  const input = h('input', { type: 'radio', class: 'radio-input', name, value, id, checked });
+  input.addEventListener('change', () => { if (input.checked) onChange(value); });
+  return h('label', { class: 'radio-pill', for: id },
+    input,
+    h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
+    h('span', { class: 'radio-text', text: label }));
+}
 
-  openSheet({
-    title: 'Lernsession',
-    body: [
-      field('Deck', deckSelect),
-      field('Kategorie', categorySelect),
-      field('Unterkategorie', subcategorySelect),
-      due.element,
-      h('div', { class: 'field' },
-        h('span', { class: 'field-label', id: 'limit-label', text: 'Kartenanzahl' }),
-        choices(LIMITS, values.limit, (value) => { values.limit = value; refresh(); }, 'Kartenanzahl')),
-      countText,
-    ],
-    actions: [{
-      label: 'Session starten',
-      icon: 'play',
-      variant: 'btn-primary btn-xl',
-      id: 'sheet-start',
-      onClick: async (sheet) => {
-        Object.assign(filters, values);
-        sheet.setBusy(true);
-        const ok = await startFromFilters(values, navigate);
-        sheet.setBusy(false);
-        if (ok) sheet.close('start');
-        else if (onApplied) onApplied();
-      },
-    }],
-    onClose: () => { if (onApplied) onApplied(); },
+function setupRow({ id, label, value, valueId, sub, action, onClick, disabled = false }) {
+  return h('button', { class: 'setup-row', type: 'button', id, 'aria-haspopup': 'dialog', disabled, on: { click: onClick } },
+    h('span', { class: 'setup-row-text' },
+      h('span', { class: 'setup-row-label', text: label }),
+      h('span', { class: 'setup-row-value', id: valueId, text: value }),
+      sub ? h('span', { class: 'setup-row-sub', text: sub }) : null),
+    h('span', { class: 'setup-row-action' }, action));
+}
+
+function openOrderSheet(current, onPick) {
+  let sheet = null;
+  // Touch: one tap picks and closes.  Keyboard (arrow keys) only moves the
+  // choice, so the sheet stays open until Escape / Schließen.
+  let viaPointer = false;
+  const rows = ORDERS.map((item) => {
+    const id = `order-${item.value}`;
+    const input = h('input', { type: 'radio', class: 'radio-input', name: 'learn-order', value: item.value, id, checked: item.value === current, autofocus: item.value === current });
+    const pick = () => {
+      onPick(item.value);
+      if (viaPointer) setTimeout(() => sheet && sheet.close('pick'), 140);
+      viaPointer = false;
+    };
+    input.addEventListener('change', () => { if (input.checked) pick(); });
+    // A tap on the option that is already chosen closes the sheet as well.
+    input.addEventListener('click', () => { if (viaPointer) pick(); });
+    return h('label', { class: 'option-row', for: id, dataset: { order: item.value } },
+      input,
+      h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
+      h('span', { class: 'option-text' },
+        h('span', { class: 'option-title', text: item.label }),
+        h('span', { class: 'option-sub', text: item.sub })));
   });
-}
-
-// -- setup screen ----------------------------------------------------------------
-function filterSummary() {
-  const parts = [];
-  const deck = filters.deckId && store.deck(filters.deckId);
-  parts.push(deck ? deck.name : 'Alle Decks');
-  const category = filters.categoryId && store.state.categories.get(filters.categoryId);
-  if (category) parts.push(category.name);
-  const subcategory = filters.subcategoryId && store.state.subcategories.get(filters.subcategoryId);
-  if (subcategory) parts.push(subcategory.name);
-  parts.push(filters.dueOnly ? 'nur fällige' : 'alle Karten');
-  parts.push(filters.limit === 'all' ? 'alle' : `${filters.limit} Karten`);
-  return parts;
+  const list = h('div', { class: 'option-list', role: 'radiogroup', 'aria-label': 'Reihenfolge', id: 'order-options' }, rows);
+  list.addEventListener('pointerdown', () => { viaPointer = true; });
+  sheet = openSheet({
+    title: 'Reihenfolge',
+    className: 'sheet-picker',
+    body: [list],
+    // The setup was redrawn meanwhile: hand the focus to the new row.
+    onClose: () => {
+      if (!document.activeElement || document.activeElement === document.body) document.getElementById('learn-order')?.focus({ preventScroll: true });
+    },
+  });
+  return sheet;
 }
 
 function renderSetup(view, ctx) {
   navigateRef = ctx.navigate;
-  const dueAll = store.localOverview().due_cards;
-  const available = localCount(filters);
-  const startButton = h('button', { class: 'btn btn-primary btn-xl btn-block', type: 'button', id: 'learn-start' }, icon('play'), 'Session starten');
-  startButton.addEventListener('click', () => startFromFilters(filters, ctx.navigate, startButton));
   const engineText = isCloud()
     ? 'Bewerte jede Karte ehrlich – Punkte, Level und der nächste Termin werden sofort berechnet, genau wie am Desktop.'
     : 'Bewerte jede Karte ehrlich – der Server berechnet Punkte, Level und den nächsten Termin.';
+  const heroTitle = h('h2', { class: 'hero-title', id: 'learn-hero-title' });
+  const heroText = h('p', { class: 'hero-text' });
+  const form = h('div', { class: 'card learn-setup', id: 'learn-setup' });
+  const presetHost = h('div', { id: 'learn-preset-host', hidden: true });
+  const countEl = h('p', { class: 'learn-count', id: 'learn-count', 'aria-live': 'polite' });
+  const startButton = h('button', { class: 'btn btn-primary btn-xl btn-block', type: 'button', id: 'learn-start' }, icon('play'), 'Session starten');
+  startButton.addEventListener('click', () => startFromFilters(filters, ctx.navigate, startButton));
+
+  const changed = (patch) => {
+    Object.assign(filters, patch, { preset: null });
+    draw();
+  };
+
+  function draw() {
+    const dueAll = store.localOverview().due_cards;
+    heroTitle.textContent = dueAll ? `${dueAll} fällig` : 'Alles erledigt';
+    heroText.textContent = dueAll ? engineText : 'Keine Karte ist gerade fällig. Du kannst trotzdem frei üben.';
+    filters.deckIds = normalizeDeckIds(filters.deckIds);
+    const now = new Date();
+    const all = store.cards();
+    const mode = (card) => !card.mastered && (!filters.dueOnly || store.isDue(card, now));
+    // One pass per change for the deck picker, one for the chosen decks.
+    const deckCounts = countIndex(all, mode);
+    const scope = new Set(filters.deckIds);
+    const scoped = scope.size ? countIndex(all, (card) => scope.has(card.deck_id) && mode(card)) : deckCounts;
+
+    const categorySelect = select([], '', { id: 'learn-category' });
+    filters.categoryId = fillCategorySelect(categorySelect, { deckIds: filters.deckIds, value: filters.categoryId, counts: scoped });
+    const subcategorySelect = select([], '', { id: 'learn-subcategory' });
+    filters.subcategoryId = fillSubcategorySelect(subcategorySelect, { categoryId: filters.categoryId, value: filters.subcategoryId, counts: scoped });
+    categorySelect.addEventListener('change', () => changed({ categoryId: categorySelect.value, subcategoryId: '' }));
+    subcategorySelect.addEventListener('change', () => changed({ subcategoryId: subcategorySelect.value }));
+
+    const available = filters.preset
+      ? localCandidates(filters).length
+      : filters.subcategoryId ? scoped.subcategories.get(filters.subcategoryId) || 0
+        : filters.categoryId ? scoped.categories.get(filters.categoryId) || 0
+          : scoped.total;
+    const planned = filters.limit === 'all' ? available : Math.min(available, Number(filters.limit));
+    const decks = deckSummary(filters.deckIds);
+    const order = ORDERS.find((item) => item.value === filters.order) || ORDERS[0];
+
+    clear(presetHost);
+    presetHost.hidden = !filters.preset;
+    if (filters.preset) {
+      presetHost.append(h('div', { class: 'banner is-info preset-banner', id: 'learn-preset' },
+        icon('filter', 'icon-sm'),
+        h('span', { class: 'spacer' },
+          h('span', { class: 'strong', text: 'Aus der Kartenverwaltung' }),
+          h('span', { class: 'preset-sub', id: 'learn-preset-text', text: [plural(available, 'Karte', 'Karten'), filters.preset.label].filter(Boolean).join(' · ') })),
+        h('button', { class: 'btn btn-icon', type: 'button', id: 'learn-preset-clear', 'aria-label': 'Übernommene Auswahl verwerfen', on: { click: () => changed({}) } }, icon('x'))));
+    }
+
+    // The form is rebuilt on every change: keep the keyboard focus in place.
+    const active = document.activeElement;
+    const focusKey = active && form.contains(active)
+      ? (active.id ? `#${CSS.escape(active.id)}` : active.dataset.value !== undefined ? `.choice[data-value="${CSS.escape(active.dataset.value)}"]` : '')
+      : '';
+    clear(form);
+    form.append(
+      setupRow({
+        id: 'learn-decks', label: 'Decks', value: decks.main, valueId: 'learn-decks-value', sub: decks.sub,
+        action: ['Auswählen', icon('chevron-right', 'icon-sm')],
+        disabled: !store.state.decks.size,
+        onClick: () => openDeckPicker({ selected: filters.deckIds, counts: deckCounts, onDone: (ids) => changed({ deckIds: ids }) }),
+      }),
+      field('Kategorie', categorySelect),
+      field('Unterkategorie', subcategorySelect),
+      h('div', { class: 'field' },
+        h('span', { class: 'field-label', id: 'learn-cards-label', text: 'Karten' }),
+        h('div', { class: 'radio-pills', role: 'radiogroup', 'aria-labelledby': 'learn-cards-label' },
+          radioPill({ name: 'learn-cards', value: 'due', label: 'Nur fällige', checked: filters.dueOnly, id: 'learn-due-only', onChange: () => changed({ dueOnly: true }) }),
+          radioPill({ name: 'learn-cards', value: 'all', label: 'Auswahl wie gefiltert', checked: !filters.dueOnly, id: 'learn-all-cards', onChange: () => changed({ dueOnly: false }) }))),
+      h('div', { class: 'field' },
+        h('span', { class: 'field-label', id: 'limit-label', text: 'Anzahl' }),
+        choices(LIMITS, filters.limit, (value) => { filters.limit = value; draw(); }, 'Anzahl')),
+      setupRow({
+        id: 'learn-order', label: 'Reihenfolge', value: order.label, valueId: 'learn-order-value', sub: order.sub,
+        action: icon('chevron-down', 'icon-sm'),
+        onClick: () => openOrderSheet(filters.order, (value) => { filters.order = value; draw(); }),
+      }));
+    if (focusKey) form.querySelector(focusKey)?.focus({ preventScroll: true });
+    // The count sits next to the start button, so both stay in view.
+    countEl.classList.toggle('is-empty', !available);
+    countEl.textContent = available
+      ? `${plural(available, 'Karte', 'Karten')} gefunden · Session: ${plural(planned, 'Karte', 'Karten')}`
+      : (filters.dueOnly && !filters.preset ? 'Keine fälligen Karten in dieser Auswahl.' : 'Keine Karten in dieser Auswahl.');
+  }
+  draw();
 
   view.append(h('div', { class: 'stack-lg' },
-    h('section', { class: 'hero' },
+    h('section', { class: 'hero hero-compact' },
       h('p', { class: 'hero-eyebrow', text: 'Lernsession' }),
-      h('h2', { class: 'hero-title', text: dueAll ? `${dueAll} fällig` : 'Alles erledigt' }),
-      h('p', { class: 'hero-text', text: dueAll ? engineText : 'Keine Karte ist gerade fällig. Du kannst trotzdem frei üben.' })),
+      heroTitle,
+      heroText),
     session && !session.finished
       ? h('a', { class: 'banner is-info', href: '#/lernen/session', id: 'learn-resume' }, icon('play', 'icon-sm'), `Laufende Session fortsetzen (${Math.min(session.index + 1, session.queue.length)} / ${session.queue.length})`)
       : null,
-    h('div', { class: 'card stack' },
-      h('div', { class: 'row' },
-        h('div', { class: 'spacer' },
-          h('p', { class: 'strong', text: 'Auswahl' }),
-          h('p', { class: 'muted small', id: 'learn-filter-summary', text: filterSummary().join(' · ') })),
-        h('button', { class: 'btn btn-soft btn-sm', type: 'button', id: 'learn-filter', on: { click: () => showFilterSheet({}, ctx.navigate, () => ctx.rerender()) } }, icon('filter', 'icon-sm'), 'Ändern')),
-      h('p', { class: 'small muted', text: available ? `${plural(available, 'Karte passt', 'Karten passen')} zur Auswahl.` : 'Keine Karte passt zur aktuellen Auswahl.' }),
-      startButton),
+    presetHost,
+    form,
+    h('div', { class: 'action-bar is-single learn-start-bar' }, countEl, startButton),
     h('a', { class: 'menu-item', href: '#/ki/test', id: 'learn-ai-test' },
       h('span', { class: 'stat-icon tone-mint' }, icon('target')),
       h('span', { class: 'menu-item-text' }, 'KI-Test erstellen', h('span', { class: 'menu-item-sub', text: 'HTML-Datei für ChatGPT & Co. erzeugen und teilen' })),
       icon('chevron-right'))));
-
-  if (pendingSheetPreset) {
-    const preset = pendingSheetPreset;
-    pendingSheetPreset = null;
-    requestAnimationFrame(() => showFilterSheet(preset, ctx.navigate, () => ctx.rerender()));
-  }
+  // Card data arriving through a sync only refreshes the counts.
+  return { onData: draw };
 }
 
 // -- session -------------------------------------------------------------------

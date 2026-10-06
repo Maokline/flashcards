@@ -8,16 +8,24 @@ import * as store from '../store.js';
 import * as sync from '../sync.js';
 import { emptyState, sectionTitle } from '../ui.js';
 import { formatDateTime, greeting, h, icon, plural, softColor, todayText } from '../util.js';
-import { openLearnSheet } from './learn.js';
+import { openDueCards } from './cards.js';
+import { openLearnSetup } from './learn.js';
 import { openSwitchSheet } from './onboarding.js';
 
-function statTile({ id, label, value, hint, iconName, tone }) {
-  return h('div', { class: 'stat', id, role: 'listitem' },
-    h('div', { class: 'stat-head' },
+function statTile({ id, label, value, hint, iconName, tone, onClick, actionLabel }) {
+  const content = [
+    h('span', { class: 'stat-head' },
       h('span', { class: 'stat-label', text: label }),
       h('span', { class: `stat-icon ${tone}` }, icon(iconName, 'icon-sm'))),
     h('span', { class: 'stat-value', text: value }),
-    hint ? h('span', { class: 'stat-hint', text: hint }) : null);
+    hint ? h('span', { class: 'stat-hint', text: hint }) : null,
+  ];
+  if (!onClick) return h('div', { class: 'stat', id, role: 'listitem' }, content);
+  // A tappable tile (e.g. "Heute fällig" opens the due cards).
+  return h('div', { class: 'stat-item', role: 'listitem' },
+    h('button', { class: 'stat stat-link', type: 'button', id, 'aria-label': actionLabel, on: { click: onClick } },
+      content,
+      h('span', { class: 'stat-more', 'aria-hidden': 'true' }, 'Anzeigen', icon('chevron-right', 'icon-sm'))));
 }
 
 function deckStats() {
@@ -110,7 +118,7 @@ function render(view, ctx) {
         class: 'home-cta',
         type: 'button',
         id: 'home-learn',
-        on: { click: () => { ctx.navigate('#/lernen'); openLearnSheet({ dueOnly: Boolean(due) || undefined }); } },
+        on: { click: () => openLearnSetup({ dueOnly: Boolean(due) || undefined }, ctx.navigate) },
       }, icon('play'), due ? 'Jetzt lernen' : 'Frei üben'),
       h('p', { class: 'home-cta-sub', text: due ? `${plural(Math.min(due, 20), 'Karte', 'Karten')} · ca. ${minutes} Min.` : 'Keine Karte fällig – wiederhole nach Lust und Laune.' })),
     syncWidget(ctx),
@@ -118,7 +126,11 @@ function render(view, ctx) {
       ? h('p', { class: 'banner' }, icon('clock', 'icon-sm'), `${plural(sync.status.pending, 'Bewertung wartet', 'Bewertungen warten')} auf Übertragung.`)
       : null),
     h('div', { class: 'stats-grid', role: 'list' },
-      statTile({ id: 'stat-due', label: 'Heute fällig', value: String(due), iconName: 'clock', tone: 'tone-apricot' }),
+      statTile({
+        id: 'stat-due', label: 'Heute fällig', value: String(due), iconName: 'clock', tone: 'tone-apricot',
+        actionLabel: `${plural(due, 'Karte', 'Karten')} heute fällig – fällige Karten anzeigen`,
+        onClick: () => openDueCards(ctx.navigate),
+      }),
       statTile({ id: 'stat-learned', label: 'Heute gelernt', value: learnedToday === undefined ? '–' : String(learnedToday), hint: overview.reviews_today !== undefined ? plural(overview.reviews_today, 'Bewertung', 'Bewertungen') : '', iconName: 'check', tone: 'tone-learn' }),
       statTile({ id: 'stat-mastered', label: 'Gekonnt', value: String(local.mastered_cards), hint: local.total_cards ? `${Math.round((local.mastered_cards / local.total_cards) * 100)} % aller Karten` : '', iconName: 'star', tone: 'tone-gold' }),
       statTile({ id: 'stat-total', label: 'Karten insgesamt', value: String(local.total_cards), hint: plural(store.state.decks.size, 'Deck', 'Decks'), iconName: 'cards', tone: 'tone-blue' })),
@@ -150,7 +162,7 @@ function renderDecks(ctx) {
   return h('div', { class: 'deck-list', id: 'deck-list' }, decks.map((deck) => deckCard(
     deck,
     stats.get(deck.id) || { total: 0, due: 0, mastered: 0 },
-    () => { ctx.navigate('#/lernen'); openLearnSheet({ deckId: deck.id }); },
+    () => openLearnSetup({ deckIds: [deck.id] }, ctx.navigate),
   )));
 }
 

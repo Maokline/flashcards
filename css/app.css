@@ -1020,6 +1020,96 @@ a { color: var(--area-text); }
 .profile-card { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: var(--radius-xl); background: linear-gradient(140deg, #F0F8F7 0%, #FFFFFF 70%); border: 1px solid var(--border); box-shadow: var(--shadow-sm); text-decoration: none; color: var(--text); }
 .profile-avatar { width: 50px; height: 50px; border-radius: 16px; display: grid; place-items: center; background: var(--brand); color: #fff; font-weight: 900; font-size: 20px; flex: none; }
 
+/* ------------------------------------- session setup, pickers, drilldown */
+.hero-compact { padding: 16px 18px; }
+.hero-compact .hero-title { font-size: 23px; }
+.learn-setup { display: flex; flex-direction: column; gap: 16px; }
+.setup-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 12px 10px 14px;
+  border-radius: 16px; border: 1.5px solid var(--border-strong); background: var(--surface); color: var(--text);
+  text-align: left; cursor: pointer; font: inherit; transition: transform 0.12s ease, background-color 0.15s ease;
+}
+.setup-row:active { transform: scale(0.99); background: var(--surface-alt); }
+.setup-row:disabled { opacity: 0.55; cursor: not-allowed; }
+.setup-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.setup-row-label { font-size: 13.5px; font-weight: 750; color: var(--text-soft); }
+.setup-row-value { font-size: 17px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-row-sub { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-row-action { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--area-text); font-size: 14.5px; font-weight: 750; }
+.learn-count { font-size: 14.5px; font-weight: 650; color: var(--text-soft); padding: 0 2px; }
+.learn-count.is-empty { color: var(--warning-text); }
+.action-bar.is-single { grid-template-columns: 1fr; }
+.learn-start-bar { gap: 6px; }
+.learn-start-bar .learn-count { text-align: center; font-size: 13.5px; }
+/* Sheet content scrolls; its rows keep their height instead of shrinking. */
+.sheet-body > .setup-row, .sheet-body > .check-list, .sheet-body > .option-list, .sheet-body > .pick-tools, .sheet-body > .field { flex-shrink: 0; }
+.preset-banner { align-items: center; }
+.preset-banner .spacer { display: flex; flex-direction: column; }
+.preset-sub { font-weight: 550; font-size: 13.5px; overflow-wrap: anywhere; }
+.preset-banner .btn-icon { color: inherit; flex: none; }
+
+/* Radios and checkboxes stay real form controls (keyboard, screen readers);
+   the visible dot / box shows the state by shape, not only by colour. */
+.radio-input, .check-input {
+  position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none;
+}
+.radio-pills { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.radio-pill, .option-row, .check-row {
+  position: relative; display: flex; align-items: center; gap: 12px; cursor: pointer;
+  border-radius: 14px; border: 1.5px solid var(--border-strong); background: var(--surface);
+  -webkit-tap-highlight-color: transparent;
+}
+.radio-pill { min-height: 52px; padding: 8px 12px; font-weight: 700; font-size: 15px; line-height: 1.25; }
+.radio-text { min-width: 0; overflow-wrap: anywhere; }
+.radio-dot {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-strong);
+  background: var(--surface); display: grid; place-items: center; transition: border-color 0.15s ease;
+}
+.radio-dot::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--area-strong); transform: scale(0); transition: transform 0.15s var(--ease); }
+.radio-input:checked + .radio-dot { border-color: var(--area-strong); }
+.radio-input:checked + .radio-dot::after { transform: scale(1); }
+.radio-pill:has(.radio-input:checked), .option-row:has(.radio-input:checked) { border-color: var(--area-strong); background: var(--area-soft); }
+.radio-input:focus-visible + .radio-dot, .check-input:focus-visible + .check-box { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.option-list { display: flex; flex-direction: column; gap: 8px; }
+.option-row { min-height: 64px; padding: 10px 14px; }
+.option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.option-title { font-weight: 800; font-size: 16px; }
+.option-sub { font-size: 13.5px; color: var(--muted); }
+
+.deck-pick-status { font-size: 15px; font-weight: 800; color: var(--area-text); }
+.pick-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.pick-tools .btn { min-height: 46px; padding: 0 8px; font-size: 14.5px; white-space: nowrap; }
+.check-list { display: flex; flex-direction: column; gap: 8px; }
+.check-row { min-height: 54px; padding: 8px 14px; }
+.check-row.is-strong { background: var(--surface-alt); }
+.check-row:has(.check-input:checked) { border-color: var(--area-strong); background: var(--area-soft); }
+.check-box {
+  flex: none; width: 24px; height: 24px; border-radius: 7px; border: 2px solid var(--border-strong); background: var(--surface);
+  display: grid; place-items: center; color: #fff; position: relative;
+}
+.check-box .icon { width: 16px; height: 16px; stroke-width: 3; opacity: 0; }
+.check-input:checked + .check-box { background: var(--area-strong); border-color: var(--area-strong); }
+.check-input:checked + .check-box .icon { opacity: 1; }
+.check-input:indeterminate + .check-box { border-color: var(--area-strong); }
+.check-input:indeterminate + .check-box::after { content: ""; width: 12px; height: 3px; border-radius: 2px; background: var(--area-strong); position: absolute; }
+.check-label { flex: 1 1 auto; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+.check-count { flex: none; min-width: 32px; padding: 2px 8px; border-radius: 999px; background: var(--surface-sunken); color: var(--text-soft); font-size: 13px; font-weight: 750; text-align: center; font-variant-numeric: tabular-nums; }
+
+.stat-item { display: flex; min-width: 0; }
+.stat-link { width: 100%; text-align: left; font: inherit; color: var(--text); cursor: pointer; transition: transform 0.12s ease; }
+.stat-link:active { transform: scale(0.98); background: var(--surface-alt); }
+.stat-more { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 750; color: var(--area-text); }
+.stat-more .icon { width: 14px; height: 14px; }
+
+.list-head { display: flex; flex-direction: column; gap: 2px; }
+.list-title { font-size: 20px; font-weight: 850; letter-spacing: -0.01em; }
+.active-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-chip.is-removable { background: var(--area-surface); border-color: var(--area-strong); color: var(--area-text); max-width: 100%; }
+.filter-chip.is-removable .chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.filter-chip.is-removable .icon { flex: none; }
+.choices-level { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+
 /* --------------------------------------------------------- responsive */
 @media (max-width: 370px) {
   :root { --gutter: 12px; }

@@ -1,15 +1,18 @@
 // Karten: mobile list (no table) with image previews, quick status chips,
-// search, filter sheet (sorting: Fälligkeit, Level, Punkte), long-press
-// multi-selection with bulk actions, and the card detail view.
+// search, filter sheet (decks, category, level, status; sorting: Fälligkeit,
+// Level, Punkte), removable filter chips, "Diese Karten lernen", long-press
+// multi-selection with bulk actions, and the card detail view.  The start
+// page's "Heute fällig" tile opens this list filtered to the due cards.
 
 import { api, ApiError, errorMessage } from '../api.js';
 import { isCloud } from '../config.js';
 import { cardImages, imageElement, thumbGrid } from '../images.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
-import { confirmDialog, emptyState, field, levelBadge, openSheet, segmented, select, toast } from '../ui.js';
+import { countIndex, deckSummary, fillCategorySelect, fillSubcategorySelect, normalizeDeckIds, openDeckPicker } from '../pickers.js';
+import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, segmented, select, toast } from '../ui.js';
 import { clear, debounce, dueLabel, formatDate, formatDateTime, h, icon, plural } from '../util.js';
-import { startWithIds } from './learn.js';
+import { openLearnSetup, startWithIds } from './learn.js';
 
 const PAGE_SIZE = 40;
 const STATUS_ITEMS = [
@@ -25,13 +28,16 @@ const SORT_ITEMS = [
   { value: 'points', label: 'Punkte' },
 ];
 const SORT_LABELS = { due: 'Fälligkeit', level: 'Level', points: 'Punkte' };
+const LIST_TITLES = { '': 'Alle Karten', due: 'Fällige Karten', new: 'Neue Karten', active: 'Aktive Karten', mastered: 'Gekonnte Karten' };
+const LEVEL_ITEMS = [{ value: '', label: 'Alle' }, ...Array.from({ length: 10 }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))];
 const STATUS_CHIP = { new: 'chip-new', due: 'chip-due', active: 'chip-active', mastered: 'chip-mastered' };
 
 const listState = {
   search: '',
-  deckId: '',
+  deckIds: [],
   categoryId: '',
   subcategoryId: '',
+  levelFilter: '',
   status: '',
   sort: 'due',
   descending: false,
@@ -40,16 +46,34 @@ const listState = {
   selected: new Set(),
 };
 
+/** Start page "Heute fällig": the list filtered to the due cards, most overdue first. */
+export function openDueCards(navigate) {
+  Object.assign(listState, {
+    search: '', deckIds: [], categoryId: '', subcategoryId: '', levelFilter: '',
+    status: 'due', sort: 'due', descending: false, pages: 1, selecting: false, selected: new Set(),
+  });
+  navigate('#/karten');
+}
+
 function activeFilterCount() {
-  return ['deckId', 'categoryId', 'subcategoryId'].filter((key) => listState[key]).length + (listState.sort !== 'due' || listState.descending ? 1 : 0);
+  return (listState.deckIds.length ? 1 : 0)
+    + ['categoryId', 'subcategoryId', 'levelFilter'].filter((key) => listState[key]).length
+    + (listState.sort !== 'due' || listState.descending ? 1 : 0);
+}
+
+function hasFilter() {
+  return Boolean(listState.status || listState.deckIds.length || listState.categoryId || listState.subcategoryId || listState.levelFilter || listState.search.trim());
 }
 
 function baseCards() {
   const needle = listState.search.trim().toLocaleLowerCase('de');
+  const decks = new Set(listState.deckIds);
+  const level = listState.levelFilter ? Number(listState.levelFilter) : 0;
   return store.cards().filter((card) => {
-    if (listState.deckId && card.deck_id !== listState.deckId) return false;
+    if (decks.size && !decks.has(card.deck_id)) return false;
     if (listState.categoryId && card.category_id !== listState.categoryId) return false;
     if (listState.subcategoryId && card.subcategory_id !== listState.subcategoryId) return false;
+    if (level && Number(card.level) !== level) return false;
     if (needle) {
       const haystack = `${card.question}\n${card.answer}\n${card.category || ''}\n${card.subcategory || ''}`.toLocaleLowerCase('de');
       if (!haystack.includes(needle)) return false;
@@ -141,9 +165,27 @@ function cardRow(card, onActivate, onLongPress) {
 }
 
 // -- list ----------------------------------------------------------------------
+function filterLabel() {
+  const parts = [];
+  if (listState.status) parts.push(store.STATUS_LABELS[listState.status]);
+  if (listState.deckIds.length) parts.push(listState.deckIds.map((id) => store.deck(id)?.name).filter(Boolean).join(' + '));
+  const category = listState.categoryId && store.state.categories.get(listState.categoryId);
+  if (category) parts.push(category.name);
+  const subcategory = listState.subcategoryId && store.state.subcategories.get(listState.subcategoryId);
+  if (subcategory) parts.push(subcategory.name);
+  if (listState.levelFilter) parts.push(`Level ${listState.levelFilter}`);
+  if (listState.search.trim()) parts.push(`„${listState.search.trim()}“`);
+  return parts.join(' · ');
+}
+
 function renderList(view, ctx) {
+  listState.deckIds = normalizeDeckIds(listState.deckIds);
   const listHost = h('div', { class: 'card-list', id: 'card-list', role: 'list' });
+  const titleEl = h('h2', { class: 'list-title', id: 'card-list-title' });
   const countEl = h('p', { class: 'result-count', id: 'card-count', 'aria-live': 'polite' });
+  const activeHost = h('div', { class: 'active-filters', id: 'card-active-filters', role: 'group', 'aria-label': 'Aktive Filter' });
+  const learnButton = h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'button', id: 'card-learn', on: { click: learnCurrent } }, icon('play'), 'Diese Karten lernen');
+  const learnBar = h('div', { class: 'action-bar is-single', id: 'card-learn-bar', hidden: true }, learnButton);
   const footer = h('div', { class: 'list-footer', id: 'card-list-end' });
   const chipsHost = h('div', { class: 'filter-chips', role: 'group', 'aria-label': 'Status' });
   const badge = h('span', { class: 'btn-badge', hidden: true });
@@ -193,15 +235,65 @@ function renderList(view, ctx) {
     }
   }
 
+  function removable(id, label, reset) {
+    return h('button', {
+      class: 'filter-chip is-removable', type: 'button', id, 'aria-label': `Filter ${label} entfernen`,
+      on: { click: () => { Object.assign(listState, reset, { pages: 1 }); update(); } },
+    }, h('span', { class: 'chip-text', text: label }), icon('x', 'icon-sm'));
+  }
+
+  function renderActiveFilters() {
+    clear(activeHost);
+    const chips = [];
+    if (listState.status) chips.push(removable('active-filter-status', store.STATUS_LABELS[listState.status], { status: '' }));
+    if (listState.deckIds.length) chips.push(removable('active-filter-decks', listState.deckIds.map((id) => store.deck(id)?.name).filter(Boolean).join(' + '), { deckIds: [], categoryId: '', subcategoryId: '' }));
+    const category = listState.categoryId && store.state.categories.get(listState.categoryId);
+    if (category) chips.push(removable('active-filter-category', category.name, { categoryId: '', subcategoryId: '' }));
+    const subcategory = listState.subcategoryId && store.state.subcategories.get(listState.subcategoryId);
+    if (subcategory) chips.push(removable('active-filter-subcategory', subcategory.name, { subcategoryId: '' }));
+    if (listState.levelFilter) chips.push(removable('active-filter-level', `Level ${listState.levelFilter}`, { levelFilter: '' }));
+    activeHost.hidden = !chips.length;
+    activeHost.append(...chips);
+  }
+
+  // The exact current result goes to the session setup.  Mastered cards are
+  // only included when the "Gekonnt" filter asks for them explicitly.
+  const learnable = () => current.filter((card) => listState.status === 'mastered' || !card.mastered);
+
+  // Shown for a filtered list (e.g. the due cards), hidden while selecting.
+  function toggleLearnBar() {
+    learnBar.hidden = !hasFilter() || listState.selecting || !learnable().length;
+  }
+
+  function learnCurrent() {
+    const ids = learnable().map((card) => card.id);
+    if (!ids.length) {
+      toast('In dieser Auswahl ist keine Karte zum Lernen.');
+      return;
+    }
+    openLearnSetup({
+      deckIds: listState.deckIds,
+      categoryId: listState.categoryId,
+      subcategoryId: listState.subcategoryId,
+      dueOnly: listState.status === 'due',
+      limit: 'all',
+      cardIds: ids,
+      label: filterLabel(),
+    }, ctx.navigate);
+  }
+
   function update() {
     const base = baseCards();
     current = filteredCards(base);
     renderChips(base);
+    renderActiveFilters();
     const filters = activeFilterCount();
     badge.hidden = !filters;
     badge.textContent = String(filters);
     filterButton.classList.toggle('is-active', Boolean(filters));
+    titleEl.textContent = LIST_TITLES[listState.status] || 'Karten';
     countEl.textContent = `${plural(current.length, 'Karte', 'Karten')} · sortiert nach ${SORT_LABELS[listState.sort]} ${listState.descending ? '↓' : '↑'}`;
+    toggleLearnBar();
     clear(listHost);
     rendered = 0;
     listHost.classList.toggle('is-selecting', listState.selecting);
@@ -239,6 +331,7 @@ function renderList(view, ctx) {
   // Update the rows in place: no re-render, the scroll position stays.
   function refreshSelection() {
     listHost.classList.toggle('is-selecting', listState.selecting);
+    toggleLearnBar();
     for (const row of listHost.querySelectorAll('.card-row')) {
       const selected = listState.selected.has(row.dataset.id);
       row.classList.toggle('is-selected', selected);
@@ -286,7 +379,12 @@ function renderList(view, ctx) {
       h('div', { class: 'search-field' }, icon('search'), searchInput),
       filterButton),
     chipsHost,
-    h('div', { class: 'stack' }, countEl, listHost, footer));
+    activeHost,
+    h('div', { class: 'stack' },
+      h('div', { class: 'list-head' }, titleEl, countEl),
+      listHost,
+      footer,
+      learnBar));
   update();
   return {
     onData: update,
@@ -399,27 +497,55 @@ async function bulkDelete(ids, done) {
 }
 
 function openFilterSheet(onApply) {
-  const values = { ...listState };
-  const deckSelect = select([], '', { id: 'cf-deck' });
+  const values = { ...listState, deckIds: [...listState.deckIds] };
   const categorySelect = select([], '', { id: 'cf-category' });
   const subcategorySelect = select([], '', { id: 'cf-subcategory' });
-  const fill = (element, options, value) => {
-    clear(element);
-    for (const option of options) element.append(h('option', { value: option.value, text: option.label }));
-    element.value = options.some((option) => option.value === value) ? value : '';
+  const deckValue = h('span', { class: 'setup-row-value', id: 'cf-decks-value' });
+  const deckSub = h('span', { class: 'setup-row-sub' });
+  const resultText = h('p', { class: 'learn-count', id: 'cf-result', 'aria-live': 'polite' });
+  let counts = null;
+  // Counts for the current status: one pass over the cards per change.
+  const recount = () => {
+    const now = new Date();
+    counts = countIndex(store.cards(), (card) => !values.status || store.statusOf(card, now) === values.status);
   };
   const refresh = () => {
-    fill(deckSelect, [{ value: '', label: 'Alle Decks' }, ...store.decks().map((deck) => ({ value: deck.id, label: deck.name }))], values.deckId);
-    values.deckId = deckSelect.value;
-    fill(categorySelect, [{ value: '', label: 'Alle Kategorien' }, ...store.categoriesOf(values.deckId || null).map((item) => ({ value: item.id, label: item.name }))], values.categoryId);
-    values.categoryId = categorySelect.value;
-    fill(subcategorySelect, [{ value: '', label: 'Alle Unterkategorien' }, ...(values.categoryId ? store.subcategoriesOf(values.categoryId) : []).map((item) => ({ value: item.id, label: item.name }))], values.subcategoryId);
-    subcategorySelect.disabled = !values.categoryId;
-    values.subcategoryId = subcategorySelect.value;
+    const decks = deckSummary(values.deckIds);
+    deckValue.textContent = decks.main;
+    deckSub.textContent = decks.sub;
+    const scope = new Set(values.deckIds);
+    const now = new Date();
+    const scoped = scope.size
+      ? countIndex(store.cards(), (card) => scope.has(card.deck_id) && (!values.status || store.statusOf(card, now) === values.status))
+      : counts;
+    values.categoryId = fillCategorySelect(categorySelect, { deckIds: values.deckIds, value: values.categoryId, counts: scoped });
+    values.subcategoryId = fillSubcategorySelect(subcategorySelect, { categoryId: values.categoryId, value: values.subcategoryId, counts: scoped });
+    const level = values.levelFilter ? Number(values.levelFilter) : 0;
+    const needle = values.search.trim().toLocaleLowerCase('de');
+    let found = 0;
+    for (const card of store.cards()) {
+      if (scope.size && !scope.has(card.deck_id)) continue;
+      if (values.categoryId && card.category_id !== values.categoryId) continue;
+      if (values.subcategoryId && card.subcategory_id !== values.subcategoryId) continue;
+      if (level && Number(card.level) !== level) continue;
+      if (values.status && store.statusOf(card, now) !== values.status) continue;
+      if (needle && !`${card.question}\n${card.answer}\n${card.category || ''}\n${card.subcategory || ''}`.toLocaleLowerCase('de').includes(needle)) continue;
+      found += 1;
+    }
+    resultText.textContent = `${plural(found, 'Karte', 'Karten')} gefunden`;
   };
-  deckSelect.addEventListener('change', () => { values.deckId = deckSelect.value; values.categoryId = ''; values.subcategoryId = ''; refresh(); });
+  const deckButton = h('button', {
+    class: 'setup-row', type: 'button', id: 'cf-decks', 'aria-haspopup': 'dialog', disabled: !store.state.decks.size,
+    on: { click: () => openDeckPicker({ selected: values.deckIds, counts, onDone: (ids) => { values.deckIds = ids; values.categoryId = ''; values.subcategoryId = ''; refresh(); } }) },
+  },
+  h('span', { class: 'setup-row-text' }, h('span', { class: 'setup-row-label', text: 'Decks' }), deckValue, deckSub),
+  h('span', { class: 'setup-row-action' }, 'Auswählen', icon('chevron-right', 'icon-sm')));
   categorySelect.addEventListener('change', () => { values.categoryId = categorySelect.value; values.subcategoryId = ''; refresh(); });
-  subcategorySelect.addEventListener('change', () => { values.subcategoryId = subcategorySelect.value; });
+  subcategorySelect.addEventListener('change', () => { values.subcategoryId = subcategorySelect.value; refresh(); });
+  const levelChoices = choices(LEVEL_ITEMS, values.levelFilter, (value) => { values.levelFilter = value; refresh(); }, 'Level');
+  levelChoices.classList.add('choices-level');
+  levelChoices.id = 'cf-level';
+  recount();
   refresh();
   const directionButton = h('button', {
     class: 'btn btn-secondary btn-sm', type: 'button', id: 'cf-direction',
@@ -428,9 +554,10 @@ function openFilterSheet(onApply) {
   });
   const apply = (sheet) => {
     Object.assign(listState, {
-      deckId: values.deckId,
+      deckIds: values.deckIds,
       categoryId: values.categoryId,
       subcategoryId: values.subcategoryId,
+      levelFilter: values.levelFilter,
       status: values.status,
       sort: values.sort,
       descending: values.descending,
@@ -442,14 +569,17 @@ function openFilterSheet(onApply) {
   openSheet({
     title: 'Filter & Sortierung',
     body: [
-      field('Deck', deckSelect),
+      deckButton,
       field('Kategorie', categorySelect),
       field('Unterkategorie', subcategorySelect),
+      h('div', { class: 'field' }, h('span', { class: 'field-label', id: 'cf-level-label', text: 'Level' }),
+        levelChoices),
       h('div', { class: 'field' }, h('span', { class: 'field-label', text: 'Status' }),
-        segmented(STATUS_ITEMS, values.status, (value) => { values.status = value; }, 'Status', { fit: true })),
+        segmented(STATUS_ITEMS, values.status, (value) => { values.status = value; recount(); refresh(); }, 'Status', { fit: true })),
       h('div', { class: 'field' }, h('span', { class: 'field-label', text: 'Sortierung' }),
         segmented(SORT_ITEMS, values.sort, (value) => { values.sort = value; }, 'Sortierung'),
         h('div', { class: 'row' }, directionButton)),
+      resultText,
     ],
     actions: [
       {
@@ -457,7 +587,7 @@ function openFilterSheet(onApply) {
         variant: 'btn-secondary',
         id: 'cf-reset',
         onClick: (sheet) => {
-          Object.assign(values, { deckId: '', categoryId: '', subcategoryId: '', status: '', sort: 'due', descending: false });
+          Object.assign(values, { deckIds: [], categoryId: '', subcategoryId: '', levelFilter: '', status: '', sort: 'due', descending: false });
           apply(sheet);
         },
       },
@@ -469,6 +599,15 @@ function openFilterSheet(onApply) {
 // -- detail --------------------------------------------------------------------
 function fact(label, value, wide = false) {
   return h('div', { class: `fact${wide ? ' fact-wide' : ''}` }, h('dt', { text: label }), h('dd', {}, value));
+}
+
+function dueFact(card) {
+  if (card.mastered) return 'Keine automatische Wiederholung';
+  if (!card.next_review) return 'Sofort (neue Karte)';
+  const due = new Date(card.next_review);
+  const now = new Date();
+  if (due > now) return `Fällig am ${formatDate(card.next_review)}`;
+  return due.toDateString() === now.toDateString() ? 'Fällig heute' : `Fällig seit ${formatDate(card.next_review)}`;
 }
 
 function renderDetail(view, ctx, cardId) {
@@ -503,9 +642,12 @@ function renderDetail(view, ctx, cardId) {
           h('p', { class: 'strong', text: levelText }),
           h('p', { class: 'small muted', text: `${card.points} Punkte · ${store.STATUS_LABELS[status]}` }),
           h('p', { class: 'small muted', text: card.mastered ? 'Keine automatische Wiederholung' : `${dueLabel(card)} · ${formatDate(card.next_review)}` }))),
-      h('dl', { class: 'facts' },
+      h('dl', { class: 'facts', id: 'detail-facts' },
         fact('Deck', store.deckName(card)),
         fact('Kategorie', [card.category, card.subcategory].filter(Boolean).join(' › ') || '–'),
+        fact('Level', card.mastered ? `Gekonnt (Level ${card.level})` : `Level ${card.level}`),
+        fact('Punkte', String(card.points)),
+        h('div', { class: 'fact fact-wide' }, h('dt', { text: 'Fälligkeit' }), h('dd', { id: 'detail-due', text: dueFact(card) })),
         fact('Serie richtig', String(card.positive_streak)),
         fact('Fehler gesamt', String(card.total_incorrect_count)),
         fact('Zuletzt gelernt', card.last_reviewed ? formatDateTime(card.last_reviewed) : 'Noch nie', true),

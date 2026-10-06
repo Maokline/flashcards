@@ -45,3 +45,55 @@ export function cardStatus(card, now = Date.now()) {
   if (card.next_review && isDue(card, now)) return 'due';
   return card.last_reviewed ? 'active' : 'new';
 }
+
+// -- session order (port of order_session_cards) --------------------------------
+// mixed: one shuffle of the whole candidate list, across all decks.
+// due: longest overdue first; no date = due now, mastered without date last.
+// level_asc / level_desc: by level, within a level by due date, then seeded
+// random.  Mastered cards keep their level (no "level 11").
+export const ORDER_MODES = ['mixed', 'due', 'level_asc', 'level_desc'];
+export const DEFAULT_ORDER = 'mixed';
+
+/** mulberry32 – the same sequence as seeded_random() in Python. */
+export function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/** Arrange the session's cards; the result only depends on the set, mode and seed. */
+export function orderSessionCards(cards, mode = DEFAULT_ORDER, { seed = 0, now = Date.now() } = {}) {
+  const reference = toMillis(now);
+  const random = seededRandom(seed);
+  // A canonical starting order: the input order must not matter.
+  const items = [...cards].sort(byId);
+  if (!ORDER_MODES.includes(mode) || mode === 'mixed') {
+    for (let index = items.length - 1; index > 0; index -= 1) {
+      const other = Math.floor(random() * (index + 1));
+      [items[index], items[other]] = [items[other], items[index]];
+    }
+    return items;
+  }
+  const dueKey = (card) => {
+    if (card.next_review) return toMillis(card.next_review);
+    return card.mastered ? Infinity : reference;
+  };
+  if (mode === 'due') {
+    return items.sort((a, b) => (dueKey(a) - dueKey(b) || 0)
+      || ((toMillis(a.created_at) || 0) - (toMillis(b.created_at) || 0))
+      || byId(a, b));
+  }
+  const rank = new Map(items.map((card) => [card.id, random()]));
+  const direction = mode === 'level_asc' ? 1 : -1;
+  return items.sort((a, b) => (direction * ((Number(a.level) || 1) - (Number(b.level) || 1)))
+    || (dueKey(a) - dueKey(b) || 0)
+    || (rank.get(a.id) - rank.get(b.id))
+    || byId(a, b));
+}
