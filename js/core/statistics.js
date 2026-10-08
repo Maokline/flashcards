@@ -1,7 +1,7 @@
 // Statistics – port of app/services/statistics_service.py and the summary
 // endpoint of the server (server/routes/statistics.py).
 
-import { toMillis } from './time.js';
+import { reviewIsDue, toMillis } from './time.js';
 
 function dayBounds(now) {
   const start = new Date(now);
@@ -19,7 +19,7 @@ export function overview({ cards, events, deckId = null, now = Date.now() }) {
   let points = 0;
   for (const card of chosen) {
     if (card.mastered) mastered += 1;
-    else if (card.next_review && toMillis(card.next_review) <= now) due += 1;
+    else if (reviewIsDue(card.next_review, now)) due += 1;
     points += Number(card.points) || 0;
   }
   const [dayStart, dayEnd] = dayBounds(now);
@@ -82,7 +82,7 @@ const byName = (a, b) => {
 export function deckStatistics(decks, cards, now = Date.now()) {
   return [...decks].sort(byName).map((deck) => {
     const own = cards.filter((card) => card.deck_id === deck.id);
-    const due = own.filter((card) => !card.mastered && card.next_review && toMillis(card.next_review) <= now).length;
+    const due = own.filter((card) => !card.mastered && reviewIsDue(card.next_review, now)).length;
     const mastered = own.filter((card) => card.mastered).length;
     const average = own.length ? own.reduce((sum, card) => sum + Number(card.level || 0), 0) / own.length : 0;
     return {

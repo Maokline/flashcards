@@ -4,6 +4,8 @@
 // js/core/dataset.js and synchronised by js/cloud/sync.js.
 
 import * as db from './db.js';
+import { isDue as coreIsDue, cardStatus } from './core/selection.js';
+import { reviewIsDue } from './core/time.js';
 
 export const state = {
   decks: new Map(),
@@ -115,16 +117,13 @@ export function deckColor(deckId) {
 }
 
 export function isDue(card, now = new Date()) {
-  if (!card.next_review) return !card.mastered;
-  return new Date(card.next_review) <= now;
+  return coreIsDue(card, now);
 }
 
 // Display status, identical vocabulary to the desktop table and the API's
 // card status filter: Neu / Fällig / Aktiv / Gekonnt.
 export function statusOf(card, now = new Date()) {
-  if (card.mastered) return 'mastered';
-  if (card.next_review && new Date(card.next_review) <= now) return 'due';
-  return card.last_reviewed ? 'active' : 'new';
+  return cardStatus(card, now);
 }
 
 export const STATUS_LABELS = { new: 'Neu', due: 'Fällig', active: 'Aktiv', mastered: 'Gekonnt' };
@@ -142,7 +141,7 @@ export function levelRange(level) {
  * js/core/selection.js, the tested port of the same rule):
  *   - deck/category/subcategory filters,
  *   - mastered cards excluded unless include_mastered,
- *   - due_only: no next_review yet, or next_review <= now,
+ *   - due_only: no next_review yet, or its local calendar day is today/earlier,
  *   - earliest due date first (cards without a date first), then created_at,
  *   - at most `limit` cards.
  * This decides WHICH cards are asked.  Points, levels and due dates are never
@@ -176,7 +175,7 @@ export function localOverview() {
   let mastered = 0;
   for (const item of state.cards.values()) {
     if (item.mastered) mastered += 1;
-    else if (item.next_review && new Date(item.next_review) <= now) due += 1;
+    else if (reviewIsDue(item.next_review, now)) due += 1;
   }
   return { total_cards: state.cards.size, due_cards: due, mastered_cards: mastered };
 }

@@ -409,6 +409,40 @@ async function pull(head) {
   prefetchMedia();
 }
 
+/** Adopt a draft-only append from an external importer without losing local work. */
+async function adoptAiAppend(head) {
+  if (!holds(head) || sync.dataset_id !== head.dataset_id) return false;
+  const base = await loadBase();
+  if (!base) return false;
+  const data = await downloadDataset(head);
+  const baseFiles = normalizeCore(base.core).ai_files;
+  // Removing or changing an existing file requires the usual conflict path.
+  for (const [path, entry] of Object.entries(baseFiles)) {
+    const remoteEntry = data.core.ai_files[path];
+    if (!remoteEntry || remoteEntry.sha256 !== entry.sha256 || remoteEntry.size !== entry.size) return false;
+  }
+  const additions = Object.entries(data.core.ai_files).filter(([path]) => !Object.hasOwn(baseFiles, path));
+  if (!additions.length) return false;
+  const previous = await fingerprintOf({ ...data.core, ai_files: baseFiles }, data.events);
+  if (previous.fingerprint !== sync.base_fingerprint) return false;
+  const info = await fingerprintOf(data.core, data.events);
+  // Check against the latest local files after downloading. A local file at
+  // the same new path must never be silently overwritten.
+  for (const [path, entry] of additions) {
+    const localEntry = state.files.get(path);
+    if (localEntry && (localEntry.sha256 !== entry.sha256 || Number(localEntry.size) !== entry.size)) return false;
+  }
+  // Only touch the file index: learning or edits can continue while the cloud
+  // download runs, and their newest cards/events stay exactly as they are.
+  await dataset.apply({ put: { files: additions.map(([path, entry]) => ({ path, ...entry })) }, silent: true });
+  await setBase({ core: info.content, events: data.events, ...info });
+  Object.assign(sync, { base_revision: Number(head.revision), last_sync_at: utcIso() });
+  await hasLocalChanges();
+  await saveState();
+  emit('sync-notice', { kind: 'pulled', revision: head.revision });
+  return true;
+}
+
 async function publish({ core, events, head, etag, leaseValue, knownDigests, remoteCore, merge = false, create = false }) {
   const revision = Number(head.revision || 0) + 1;
   const token = shortId();
@@ -551,7 +585,9 @@ export function check() {
     }
     await recover(head);
     if (sync.lease_id && !holds(head)) await lostLease(head);
-    else if (!sync.lease_id && !sync.conflict) {
+    else if (holds(head) && Number(head.revision) !== sync.base_revision) {
+      if (!(await adoptAiAppend(head))) await lostLease(head);
+    } else if (!sync.lease_id && !sync.conflict) {
       sync.known_lease = head.lease || null;
       if (Number(head.revision) !== sync.base_revision && !(await hasLocalChanges())) await pull(head);
     } else {
@@ -568,7 +604,7 @@ export function check() {
 export function commit() {
   return withLock(async () => {
     if (!sync.lease_id || sync.conflict) return false;
-    const local = await exportLocal();
+    let local = await exportLocal();
     if (!(await hasLocalChanges(local))) {
       publishStatus();
       return false;
@@ -580,6 +616,10 @@ export function commit() {
         if (!head) throw new GraphError(`In ${current.label} liegen keine FlashCard-Daten.`);
         await recover(head);
         if (sync.moved_to) return false;
+        if (holds(head) && Number(head.revision) !== sync.base_revision && await adoptAiAppend(head)) {
+          local = await exportLocal();
+          if (!(await hasLocalChanges(local))) return false;
+        }
         if (!holds(head) || Number(head.revision) !== sync.base_revision) {
           await lostLease(head);
           return false;

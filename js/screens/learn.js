@@ -54,6 +54,7 @@ function selectionPayload(values) {
     category_ids: values.categoryId ? [values.categoryId] : [],
     subcategory_ids: values.subcategoryId ? [values.subcategoryId] : [],
     due_only: values.dueOnly,
+    tz_offset: -new Date().getTimezoneOffset(),
     include_mastered: false,
     // The order applies to the whole candidate list; the limit comes after it.
     limit: null,

@@ -606,7 +606,7 @@ function dueFact(card) {
   if (!card.next_review) return 'Sofort (neue Karte)';
   const due = new Date(card.next_review);
   const now = new Date();
-  if (due > now) return `Fällig am ${formatDate(card.next_review)}`;
+  if (!store.isDue(card, now)) return `Fällig am ${formatDate(card.next_review)}`;
   return due.toDateString() === now.toDateString() ? 'Fällig heute' : `Fällig seit ${formatDate(card.next_review)}`;
 }
 

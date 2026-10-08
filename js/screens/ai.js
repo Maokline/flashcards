@@ -57,14 +57,16 @@ function renderHub(view, ctx) {
     jobsHost));
 
   let alive = true;
+  let loadVersion = 0;
   const load = async () => {
+    const version = ++loadVersion;
     try {
       const data = await api.get('/api/ai-drafts/jobs');
-      if (!alive) return;
+      if (!alive || version !== loadVersion) return;
       clear(jobsHost);
       if (!data.items.length) {
         jobsHost.append(emptyState('inbox', 'Keine Entwürfe', isLocal()
-          ? 'Lege ein Entwurfspaket am Desktop in den KI-Import-Ordner – es erscheint nach der nächsten Synchronisation hier.'
+          ? 'Lege ein Entwurfspaket am Desktop in den KI-Import-Ordner – bei bestehender Verbindung erscheint es hier automatisch.'
           : 'Importpakete erscheinen hier, sobald sie im Posteingang des Servers liegen.'));
         return;
       }
@@ -84,12 +86,15 @@ function renderHub(view, ctx) {
             : h('span', { class: `deck-due${open ? '' : ' is-zero'}`, text: String(open), title: 'offen' })));
       }
     } catch (error) {
-      if (!alive) return;
+      if (!alive || version !== loadVersion) return;
       clear(jobsHost);
       jobsHost.append(error instanceof NetworkError ? offlineNotice() : h('p', { class: 'form-error', text: errorMessage(error) }));
     }
   };
   load();
+  // Show the cached inbox immediately, then check for newly saved desktop
+  // packages on entry instead of waiting for the periodic cloud check.
+  if (isLocal() && navigator.onLine) sync.pull().catch(() => {});
   return { cleanup: () => { alive = false; }, onData: () => { if (isLocal()) load(); } };
 }
 
@@ -424,6 +429,7 @@ function renderTest(view, ctx) {
         deck_ids: values.deckId ? [values.deckId] : [],
         category_ids: values.categoryId ? [values.categoryId] : [],
         due_only: values.dueOnly,
+        tz_offset: -new Date().getTimezoneOffset(),
         include_mastered: values.includeMastered,
         limit: values.limit === 'all' ? null : Number(values.limit),
       };

@@ -1,10 +1,11 @@
 // Session selection – port of app/services/session_selection.py.
 
-import { toMillis } from './time.js';
+import { reviewIsDue, toMillis } from './time.js';
 
 export function isDue(card, now = Date.now()) {
+  if (card.mastered) return false;
   if (!card.next_review) return !card.mastered;
-  return toMillis(card.next_review) <= now;
+  return reviewIsDue(card.next_review, now);
 }
 
 export function selectSessionCards(cards, {

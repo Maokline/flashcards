@@ -101,11 +101,10 @@ export function dueLabel(card) {
   if (!card.next_review) return 'Sofort';
   const due = new Date(card.next_review);
   const days = Math.round((startOfDay(due) - startOfDay(new Date())) / DAY);
-  if (due <= new Date()) {
+  if (days <= 0) {
     if (days >= 0) return 'Heute fällig';
     return days === -1 ? 'Seit gestern fällig' : `Seit ${-days} Tagen fällig`;
   }
-  if (days <= 0) return 'Heute';
   if (days === 1) return 'Morgen';
   if (days < 7) return `In ${days} Tagen`;
   return formatDate(card.next_review);

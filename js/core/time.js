@@ -71,6 +71,19 @@ export function addDays(millis, days) {
   return millis + days * 24 * 60 * 60 * 1000;
 }
 
+/** Exclusive end of the local calendar day; Date handles DST at midnight. */
+export function dueDayEnd(now = Date.now()) {
+  const end = new Date(toMillis(now));
+  end.setHours(0, 0, 0, 0);
+  end.setDate(end.getDate() + 1);
+  return end.getTime();
+}
+
+export function reviewIsDue(nextReview, now = Date.now()) {
+  const due = toMillis(nextReview);
+  return due !== null && due < dueDayEnd(now);
+}
+
 export function later(first, second) {
   const a = toMillis(first);
   const b = toMillis(second);
