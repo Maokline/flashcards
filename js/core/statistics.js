@@ -2,6 +2,7 @@
 // endpoint of the server (server/routes/statistics.py).
 
 import { reviewIsDue, toMillis } from './time.js';
+export { advanced, stageProgress } from './advanced_statistics.js';
 
 function dayBounds(now) {
   const start = new Date(now);

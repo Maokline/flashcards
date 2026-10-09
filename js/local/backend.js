@@ -14,6 +14,8 @@ import * as dataset from '../core/dataset.js';
 import { levelRanges, MASTERED_POINTS } from '../core/engine.js';
 import { selectSessionCards } from '../core/selection.js';
 import * as statistics from '../core/statistics.js';
+import { getFocus, setFocus } from '../core/learning_focus.js';
+import { on } from '../bus.js';
 import { utcIso } from '../core/time.js';
 import * as cloud from '../cloud/sync.js';
 
@@ -34,6 +36,9 @@ function parse(path) {
 }
 
 const notFound = () => new ApiError(404, { error: 'not_found', message: 'Nicht gefunden.' });
+const advancedCache = new Map();
+on('data-changed', () => advancedCache.clear());
+on('local-change', () => advancedCache.clear());
 
 function allCards() {
   return [...state.cards.values()];
@@ -104,6 +109,26 @@ async function createAiTest(json) {
 
 async function route(method, parts, query, json, form) {
   const [area, ...rest] = parts;
+  if (area === 'learning-focus' && !rest.length) {
+    if (method === 'GET') return getFocus();
+    if (method === 'POST') return setFocus(json?.deck_ids ?? null);
+  }
+  if (area === 'statistics' && rest[0] === 'advanced' && method === 'GET') {
+    const deckIds = query.has('deck_ids') ? query.get('deck_ids').split(',').filter(Boolean) : null;
+    const days = query.get('days') === 'all' ? null : Number(query.get('days') || 30);
+    if (days !== null && ![1, 7, 30, 90].includes(days)) throw new ApiError(422, { error: 'validation', message: 'Ungültiger Zeitraum.' });
+    const now = new Date();
+    const key = `${now.toDateString()}|${deckIds?.join(',') ?? '*'}|${query.get('category_id') ?? ''}|${days}`;
+    if (!advancedCache.has(key)) {
+      if (advancedCache.size >= 8) advancedCache.clear();
+      advancedCache.set(key, statistics.advanced({
+        decks: [...state.decks.values()], categories: [...state.categories.values()],
+        cards: allCards(), events: [...state.events.values()], deckIds,
+        categoryId: query.get('category_id') || null, days, now,
+      }));
+    }
+    return structuredClone(advancedCache.get(key));
+  }
   if (area === 'meta' && method === 'GET') {
     return { app: 'FlashCard App V2', app_version: cloud.status.label || 'Cloud', levels: levelRanges(), mastered_points: MASTERED_POINTS, server_time: utcIso() };
   }

@@ -88,7 +88,9 @@ async function pullOnce() {
       await db.applyChanges({ reset: data.reset, upserts, deleted, meta });
       applyToMemory({ reset: data.reset, upserts, deleted });
       Object.assign(state.meta, meta);
-      changed = changed || data.reset
+      // Shared app preferences can advance the existing cursor without an
+      // entity row. Refresh consumers after that change as well.
+      changed = changed || data.reset || data.cursor !== since
         || Object.values(upserts).some((items) => items.length)
         || Object.values(deleted).some((items) => items.length);
       since = data.cursor;

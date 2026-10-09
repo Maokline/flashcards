@@ -1110,6 +1110,69 @@ a { color: var(--area-text); }
 .filter-chip.is-removable .icon { flex: none; }
 .choices-level { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 
+/* Learning focus and advanced statistics use the existing area colours,
+   cards, progress bars and native bottom-sheet form controls. */
+.focus-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 48px; padding: 10px 14px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface); color: var(--area-text);
+  box-shadow: var(--shadow-sm); font-size: 14.5px; font-weight: 750; text-align: left; cursor: pointer;
+}
+.focus-summary > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.stage-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; text-align: left; }
+.stage-card-link { color: var(--text); cursor: pointer; transition: transform 0.12s ease; }
+.stage-card-link:active { transform: scale(0.985); }
+.stage-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--area-text); }
+.stage-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stage-title { min-width: 0; font-size: 25px; font-weight: 850; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
+.stage-bar-row { display: flex; align-items: center; gap: 12px; }
+.stage-bar-row .progress { display: block; flex: 1 1 auto; height: 10px; }
+.stage-bar-row .progress-bar { display: block; }
+.stage-percent { font-size: 16px; font-weight: 800; color: var(--area-text); font-variant-numeric: tabular-nums; }
+.statistics-tabs { grid-auto-flow: initial; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.statistics-tabs .segment { min-width: 0; min-height: 46px; }
+.statistics-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.statistics-filter {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  min-width: 0; width: 100%; min-height: 48px; padding: 8px 12px; border-radius: var(--radius);
+  border: 1px solid var(--border-strong); background: var(--surface); text-align: left; font-weight: 700; font-size: 14px; cursor: pointer;
+}
+.statistics-filter > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+#statistics-category { grid-column: 1 / -1; }
+.statistics-focus-reset { justify-self: start; width: fit-content; min-height: 44px; font-size: 13.5px; }
+.statistics-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0;
+  width: 100%; min-height: 52px; text-align: left; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--surface); padding: 10px 14px; cursor: pointer; font-weight: 700;
+}
+.statistics-option[aria-pressed="true"] { background: var(--area-soft); border-color: var(--area-strong); }
+.statistics-option-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.distribution { display: flex; flex-direction: column; gap: 4px; }
+.distribution-row { display: flex; flex-direction: column; gap: 8px; width: 100%; min-height: 54px; min-width: 0; text-align: left; border: 0; border-radius: var(--radius-sm); padding: 9px 4px; background: transparent; cursor: pointer; }
+.distribution-row:active { background: var(--area-soft); }
+.distribution-row:disabled { cursor: default; }
+.distribution-row .progress, .distribution-row .progress-bar { display: block; width: 100%; }
+.distribution-row .progress-bar { width: var(--value, 0%); }
+.distribution-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 650; }
+.distribution-value { flex: none; color: var(--area-text); font-variant-numeric: tabular-nums; font-weight: 800; }
+.statistics-bars { display: flex; align-items: flex-end; gap: 4px; height: 120px; width: 100%; }
+.statistics-bar-col { height: 100%; flex: 1 1 0; min-width: 0; display: flex; justify-content: center; align-items: flex-end; }
+.statistics-bar { width: 100%; max-width: 24px; height: var(--h, 0%); border-radius: 5px 5px 2px 2px; background: var(--area-accent); }
+.problem-card { display: flex; flex-direction: column; gap: 10px; content-visibility: auto; contain-intrinsic-size: auto 180px; }
+.problem-rank { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 9px; background: var(--area-soft); color: var(--area-text); font-size: 13px; font-weight: 800; }
+.problem-question { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; min-height: 44px; font-size: 16px; line-height: 1.35; font-weight: 750; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.problem-metrics { display: flex; flex-wrap: wrap; gap: 6px; }
+.statistics-score { font-size: 13.5px; color: var(--muted); }
+.statistics-score summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--area-text); font-weight: 750; }
+.statistics-score summary::after { content: "+"; margin-left: auto; padding-left: 12px; font-size: 18px; }
+.statistics-score[open] summary::after { content: "−"; }
+.comparison-card { content-visibility: auto; contain-intrinsic-size: auto 240px; }
+@media (min-width: 600px) {
+  .statistics-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .statistics-filters { grid-template-columns: 1fr 1fr 2fr; }
+  #statistics-category { grid-column: auto; }
+}
+
 /* --------------------------------------------------------- responsive */
 @media (max-width: 370px) {
   :root { --gutter: 12px; }

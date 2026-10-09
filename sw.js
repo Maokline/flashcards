@@ -11,7 +11,7 @@
 
 // The sync server and tools/build_pwa.py replace this value with a content
 // hash of all app files, so every release is a new service worker version.
-const VERSION = '82a4eff8e4db';
+const VERSION = '4e904775b254';
 const SHELL_CACHE = `fc-shell-${VERSION}`;
 const MEDIA_CACHE = 'fc-media-v1';
 const MEDIA_LIMIT = 600;
@@ -25,15 +25,18 @@ const PRECACHE = [
   'js/api.js',
   'js/app.js',
   'js/bus.js',
+  'js/calendar.js',
   'js/cloud/errors.js',
   'js/cloud/providers.js',
   'js/cloud/sync.js',
   'js/config.js',
   'js/core/aidrafts.js',
   'js/core/aitest.js',
+  'js/core/advanced_statistics.js',
   'js/core/canonical.js',
   'js/core/dataset.js',
   'js/core/engine.js',
+  'js/core/learning_focus.js',
   'js/core/merge.js',
   'js/core/selection.js',
   'js/core/statistics.js',
@@ -44,6 +47,7 @@ const PRECACHE = [
   'js/gdrive/store.js',
   'js/images.js',
   'js/local/backend.js',
+  'js/learning_focus.js',
   'js/onedrive/auth.js',
   'js/onedrive/graph.js',
   'js/onedrive/store.js',
@@ -52,10 +56,12 @@ const PRECACHE = [
   'js/screens/cards.js',
   'js/screens/device.js',
   'js/screens/editor.js',
+  'js/screens/focus_ui.js',
   'js/screens/home.js',
   'js/screens/learn.js',
   'js/screens/more.js',
   'js/screens/onboarding.js',
+  'js/screens/statistics.js',
   'js/store.js',
   'js/sync-server.js',
   'js/sync.js',

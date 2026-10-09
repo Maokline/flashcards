@@ -9,6 +9,7 @@
 
 import { api, ApiError, errorMessage, NetworkError, useLocalBackend } from './api.js';
 import { emit, on } from './bus.js';
+import { startCalendarWatch } from './calendar.js';
 import { config, isCloud, loadConfig } from './config.js';
 import * as dataset from './core/dataset.js';
 import * as db from './db.js';
@@ -520,6 +521,7 @@ async function startApp() {
   buildShell();
   if (!started) {
     started = true;
+    startCalendarWatch();
     window.addEventListener('hashchange', () => route());
     on('data-changed', onDataChanged);
     on('summary', onDataChanged);

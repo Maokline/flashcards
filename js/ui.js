@@ -19,7 +19,9 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('scroll', update);
 }
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// SVG <use href="#icon"> is not a keyboard target. Restrict links to
+// anchors so an icon never becomes the apparent last item in the focus trap.
+const FOCUSABLE = 'button:not([disabled]), a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const openSheets = [];
 
 document.addEventListener('keydown', (event) => {
@@ -29,11 +31,14 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     top.close();
   } else if (event.key === 'Tab') {
-    const items = [...top.element.querySelectorAll(FOCUSABLE)].filter((item) => item.offsetParent !== null);
+    const items = [...top.element.querySelectorAll(FOCUSABLE)].filter((item) => item.tabIndex >= 0 && item.getClientRects().length && !item.closest('[hidden], [inert]'));
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    if (!top.element.contains(document.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
@@ -129,7 +134,7 @@ export function openSheet({ title, body = [], actions = [], stacked = false, onC
   document.body.classList.add('is-locked');
   openSheets.push(api);
   requestAnimationFrame(() => {
-    const target = panel.querySelector('[autofocus]') || panel.querySelector('.sheet-body ' + FOCUSABLE) || panel.querySelector(FOCUSABLE);
+    const target = panel.querySelector('[autofocus]') || bodyEl.querySelector(FOCUSABLE) || panel.querySelector(FOCUSABLE);
     if (target) target.focus({ preventScroll: true });
   });
   return api;

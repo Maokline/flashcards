@@ -149,6 +149,12 @@ function prefetchImages(ids) {
 async function startFromFilters(values, navigate, button) {
   if (button) button.disabled = true;
   try {
+    // A statistics handoff only prepares a selection. Replace a running
+    // session deliberately when the user presses start, never during handoff.
+    if (session && !session.finished) {
+      const replace = await confirmDialog({ title: 'Neue Session starten?', text: 'Eine Lernsession läuft noch. Bereits gespeicherte Bewertungen bleiben erhalten. Die neue Auswahl startet erst nach deiner Bestätigung.', confirm: 'Neue Session', cancel: 'Zurück' });
+      if (!replace) return false;
+    }
     const ids = await candidateIds(values);
     const seed = randomSeed();
     const now = Date.now();
@@ -312,7 +318,7 @@ function renderSetup(view, ctx) {
       presetHost.append(h('div', { class: 'banner is-info preset-banner', id: 'learn-preset' },
         icon('filter', 'icon-sm'),
         h('span', { class: 'spacer' },
-          h('span', { class: 'strong', text: 'Aus der Kartenverwaltung' }),
+          h('span', { class: 'strong', text: 'Übernommene Kartenauswahl' }),
           h('span', { class: 'preset-sub', id: 'learn-preset-text', text: [plural(available, 'Karte', 'Karten'), filters.preset.label].filter(Boolean).join(' · ') })),
         h('button', { class: 'btn btn-icon', type: 'button', id: 'learn-preset-clear', 'aria-label': 'Übernommene Auswahl verwerfen', on: { click: () => changed({}) } }, icon('x'))));
     }

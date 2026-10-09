@@ -6,11 +6,15 @@ import { isCloud } from '../config.js';
 import * as cloud from '../cloud/sync.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
-import { emptyState, sectionTitle } from '../ui.js';
-import { formatDateTime, greeting, h, icon, plural, softColor, todayText } from '../util.js';
-import { openDueCards } from './cards.js';
+import { errorMessage } from '../api.js';
+import { readFocus, resolveFocus, saveFocus } from '../learning_focus.js';
+import { emptyState, sectionTitle, toast } from '../ui.js';
+import { clear, formatDateTime, formatDuration, greeting, h, icon, percent as formatPercent, plural, softColor, todayText } from '../util.js';
+import { openDueCards, openMasteredCards } from './cards.js';
 import { openLearnSetup } from './learn.js';
 import { openSwitchSheet } from './onboarding.js';
+import { openFocusDeckPicker, stageProgressCard } from './focus_ui.js';
+import { fetchAdvanced, openStatistics } from './statistics.js';
 
 function statTile({ id, label, value, hint, iconName, tone, onClick, actionLabel }) {
   const content = [
@@ -89,27 +93,43 @@ function syncWidget(ctx) {
 }
 
 function render(view, ctx) {
-  const local = store.localOverview();
-  const summary = store.state.summary;
-  const overview = (summary && summary.overview) || {};
-  const learnedToday = overview.cards_learned_today;
-  const due = local.due_cards;
-  const fetchedAt = summary && summary.fetched_at ? new Date(summary.fetched_at).getTime() : 0;
-  if (Date.now() - fetchedAt > 15000) sync.refreshSummary();
-
-  const status = due
-    ? `${plural(due, 'Karte ist', 'Karten sind')} heute fällig.`
-    : local.total_cards ? 'Für heute ist alles erledigt. Stark!' : 'Lege deine erste Karte an, um loszulegen.';
-  const done = Number(learnedToday) || 0;
-  const goal = done + due;
-  const percent = goal ? Math.round((done / goal) * 100) : (local.total_cards ? 100 : 0);
-  const minutes = Math.max(1, Math.round(Math.min(due, 20) * 0.35));
-
-  view.append(h('div', { class: 'stack-lg' },
+  const host = h('div', { class: 'stack-lg', id: 'home-dashboard' });
+  view.append(host);
+  host.append(h('section', { class: 'card row', role: 'status' }, h('span', { class: 'spinner spinner-sm' }), 'Dein Lernfokus wird geladen …'));
+  let alive = true;
+  let generation = 0;
+  let focusIds = [];
+  function focusSheet() {
+    return openFocusDeckPicker({ selected: focusIds, onApply: async (ids) => {
+      await saveFocus(ids);
+      await load();
+      toast('Lernfokus gespeichert', { tone: 'success' });
+    } });
+  }
+  function requireFocus(action) {
+    if (!focusIds.length) { focusSheet(); return; }
+    action();
+  }
+  function draw(summary) {
+    const overview = summary.overview || {};
+    const learnedToday = Number(overview.cards_learned_today) || 0;
+    const due = Number(overview.due_cards) || 0;
+    const total = Number(overview.total_cards) || 0;
+    const mastered = Number(overview.mastered_cards) || 0;
+    const status = !focusIds.length ? 'Wähle Decks für deinen Lernfokus.' : due
+      ? `${plural(due, 'Karte ist', 'Karten sind')} heute fällig.`
+      : total ? 'Für heute ist alles erledigt. Stark!' : 'In deinem Lernfokus sind noch keine Karten.';
+    const goal = learnedToday + due;
+    const percent = goal ? Math.round((learnedToday / goal) * 100) : (total ? 100 : 0);
+    const minutes = Math.max(1, Math.round(Math.min(due, 20) * 0.35));
+    clear(host);
+    host.append(...[
+    h('button', { class: 'focus-summary', type: 'button', id: 'home-focus', 'aria-haspopup': 'dialog', on: { click: focusSheet } },
+      h('span', {}, icon('layers', 'icon-sm'), `Lernfokus · ${plural(focusIds.length, 'Deck', 'Decks')}`), icon('chevron-down', 'icon-sm')),
     h('section', { class: 'home-hero', 'aria-labelledby': 'home-greeting' },
       h('div', { class: 'home-hero-top' },
         h('div', { class: 'ring', role: 'img', 'aria-label': `${percent} Prozent des heutigen Pensums`, vars: { '--value': String(percent) } },
-          h('span', {}, `${done}`, h('small', { text: 'gelernt' }))),
+          h('span', {}, `${learnedToday}`, h('small', { text: 'gelernt' }))),
         h('div', { class: 'spacer' },
           h('p', { class: 'home-date', text: todayText() }),
           h('h2', { class: 'home-greeting', id: 'home-greeting', text: greeting() }),
@@ -118,28 +138,50 @@ function render(view, ctx) {
         class: 'home-cta',
         type: 'button',
         id: 'home-learn',
-        on: { click: () => openLearnSetup({ dueOnly: Boolean(due) || undefined }, ctx.navigate) },
-      }, icon('play'), due ? 'Jetzt lernen' : 'Frei üben'),
-      h('p', { class: 'home-cta-sub', text: due ? `${plural(Math.min(due, 20), 'Karte', 'Karten')} · ca. ${minutes} Min.` : 'Keine Karte fällig – wiederhole nach Lust und Laune.' })),
+        on: { click: () => total ? openLearnSetup({ deckIds: focusIds, dueOnly: Boolean(due), cardIds: due ? undefined : summary.card_ids, label: 'Lernfokus' }, ctx.navigate) : focusSheet() },
+      }, icon('play'), !focusIds.length ? 'Lernfokus wählen' : due ? 'Jetzt lernen' : total ? 'Frei üben' : 'Lernfokus ändern'),
+      h('p', { class: 'home-cta-sub', text: due ? `${plural(Math.min(due, 20), 'Karte', 'Karten')} · ca. ${minutes} Min.` : total ? 'Keine Karte fällig – wiederhole nach Lust und Laune.' : 'Dein Lernfokus bestimmt Kennzahlen und Lernfortschritt.' })),
     syncWidget(ctx),
     isCloud() ? null : (sync.status.pending
       ? h('p', { class: 'banner' }, icon('clock', 'icon-sm'), `${plural(sync.status.pending, 'Bewertung wartet', 'Bewertungen warten')} auf Übertragung.`)
       : null),
+    summary.offline ? h('p', { class: 'banner', text: 'Offline: Fortschritt aus der lokalen Kopie; Aktivität kann unvollständig sein.' }) : null,
+    stageProgressCard(summary.stage, { id: 'home-stage-progress', deckCount: focusIds.length, onClick: () => openStatistics(ctx.navigate, { tab: 'progress' }) }),
     h('div', { class: 'stats-grid', role: 'list' },
       statTile({
         id: 'stat-due', label: 'Heute fällig', value: String(due), iconName: 'clock', tone: 'tone-apricot',
         actionLabel: `${plural(due, 'Karte', 'Karten')} heute fällig – fällige Karten anzeigen`,
-        onClick: () => openDueCards(ctx.navigate),
+        onClick: () => requireFocus(() => openDueCards(ctx.navigate, focusIds)),
       }),
-      statTile({ id: 'stat-learned', label: 'Heute gelernt', value: learnedToday === undefined ? '–' : String(learnedToday), hint: overview.reviews_today !== undefined ? plural(overview.reviews_today, 'Bewertung', 'Bewertungen') : '', iconName: 'check', tone: 'tone-learn' }),
-      statTile({ id: 'stat-mastered', label: 'Gekonnt', value: String(local.mastered_cards), hint: local.total_cards ? `${Math.round((local.mastered_cards / local.total_cards) * 100)} % aller Karten` : '', iconName: 'star', tone: 'tone-gold' }),
-      statTile({ id: 'stat-total', label: 'Karten insgesamt', value: String(local.total_cards), hint: plural(store.state.decks.size, 'Deck', 'Decks'), iconName: 'cards', tone: 'tone-blue' })),
+      statTile({ id: 'stat-learned', label: 'Heute gelernt', value: String(learnedToday), hint: plural(overview.reviews_today || 0, 'Bewertung', 'Bewertungen'), iconName: 'check', tone: 'tone-learn', actionLabel: 'Heute gelernte Karten: Aktivität anzeigen', onClick: () => openStatistics(ctx.navigate, { tab: 'activity', todayOnly: true, days: '7' }) }),
+      statTile({ id: 'stat-mastered', label: 'Gekonnt', value: String(mastered), hint: `von ${total} Karten`, iconName: 'star', tone: 'tone-gold', actionLabel: 'Gekonnte Karten im Lernfokus anzeigen', onClick: () => requireFocus(() => openMasteredCards(ctx.navigate, focusIds)) }),
+      statTile({ id: 'stat-total', label: 'Karten insgesamt', value: String(total), hint: plural(focusIds.length, 'Deck', 'Decks'), iconName: 'cards', tone: 'tone-blue' }),
+      statTile({ id: 'stat-accuracy', label: 'Trefferquote', value: formatPercent(overview.accuracy_total), hint: 'im Lernfokus', iconName: 'target', tone: 'tone-blue' }),
+      statTile({ id: 'stat-time', label: 'Lernzeit heute', value: formatDuration(overview.learning_seconds_today), hint: 'im Lernfokus', iconName: 'clock', tone: 'tone-slate' })),
     h('div', { class: 'quick-actions' },
       h('a', { class: 'quick-action', href: '#/karten/neu', id: 'qa-new' }, h('span', { class: 'stat-icon tone-blue' }, icon('plus')), 'Neue Karte'),
       h('a', { class: 'quick-action', href: '#/ki', id: 'qa-drafts' }, h('span', { class: 'stat-icon tone-mint' }, icon('inbox')), 'KI-Entwürfe'),
       h('a', { class: 'quick-action', href: '#/ki/test', id: 'qa-test' }, h('span', { class: 'stat-icon tone-apricot' }, icon('target')), 'KI-Test')),
-    sectionTitle('Decks', h('a', { href: '#/karten', class: 'small', text: 'Alle Karten' })),
-    renderDecks(ctx)));
+    sectionTitle('Decks im Lernfokus', h('a', { href: '#/karten', class: 'small', text: 'Alle Karten' })),
+    renderDecks(ctx, focusIds, summary.decks || []),
+    ].filter((node) => node !== null && node !== undefined));
+  }
+  async function load() {
+    const request = ++generation;
+    try {
+      const focus = await readFocus();
+      if (!alive || request !== generation) return;
+      const ids = resolveFocus(focus, store.decks());
+      const summary = await fetchAdvanced({ deckIds: ids, days: 'all' });
+      if (!alive || request !== generation) return;
+      focusIds = ids;
+      draw(summary);
+    } catch (error) {
+      if (!alive || request !== generation) return;
+      clear(host); host.append(h('p', { class: 'banner', text: errorMessage(error) }), h('button', { class: 'btn btn-secondary', type: 'button', on: { click: load } }, 'Erneut laden'));
+    }
+  }
+  load();
   // The sync widget follows the cloud state (active / read-only / offline).
   let lastState = isCloud() ? cloud.status.state : '';
   const off = on('status', (status) => {
@@ -149,16 +191,16 @@ function render(view, ctx) {
     const next = syncWidget(ctx);
     if (current && next) current.replaceWith(next);
   });
-  return { cleanup: off };
+  return { cleanup: () => { alive = false; generation += 1; off(); }, onData: load };
 }
 
-function renderDecks(ctx) {
-  const decks = store.decks();
+function renderDecks(ctx, focusIds, entries) {
+  const chosen = new Set(focusIds);
+  const decks = store.decks().filter((deck) => chosen.has(deck.id));
   if (!decks.length) {
-    return emptyState('layers', 'Noch keine Decks', 'Decks entstehen mit der ersten Karte.',
-      h('a', { class: 'btn btn-primary', href: '#/karten/neu' }, icon('plus'), 'Erste Karte anlegen'));
+    return emptyState('layers', 'Kein Deck im Lernfokus', 'Über „Lernfokus“ kannst du Decks auswählen. Auch eine leere Auswahl wird gespeichert.');
   }
-  const stats = deckStats();
+  const stats = new Map(entries.map((entry) => [entry.deck_id, { total: entry.total_cards, due: entry.due_cards, mastered: entry.mastered_cards }]));
   return h('div', { class: 'deck-list', id: 'deck-list' }, decks.map((deck) => deckCard(
     deck,
     stats.get(deck.id) || { total: 0, due: 0, mastered: 0 },

@@ -10,6 +10,7 @@ import * as sync from '../sync.js';
 import { confirmDialog, emptyState, sectionTitle, toast } from '../ui.js';
 import { clear, formatBytes, formatDateTime, formatDuration, h, icon, percent, plural, softColor } from '../util.js';
 import { APP_VERSION, installPrompt, isStandalone, logout } from '../app.js';
+import { renderStatistics as renderAdvancedStatistics } from './statistics.js';
 
 function menuItem(href, iconName, tone, title, sub, id) {
   return h('a', { class: 'menu-item', href, id },
@@ -294,7 +295,7 @@ export default {
     area: 'stats',
     tab: 'mehr',
     title: () => ({ title: 'Statistik', eyebrow: 'Mehr', back: '#/mehr' }),
-    render: renderStatistics,
+    render: renderAdvancedStatistics,
   },
   settings: {
     area: 'more',

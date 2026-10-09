@@ -47,10 +47,19 @@ const listState = {
 };
 
 /** Start page "Heute fällig": the list filtered to the due cards, most overdue first. */
-export function openDueCards(navigate) {
+export function openDueCards(navigate, deckIds = []) {
   Object.assign(listState, {
-    search: '', deckIds: [], categoryId: '', subcategoryId: '', levelFilter: '',
+    search: '', deckIds: [...deckIds], categoryId: '', subcategoryId: '', levelFilter: '',
     status: 'due', sort: 'due', descending: false, pages: 1, selecting: false, selected: new Set(),
+  });
+  navigate('#/karten');
+}
+
+/** Dashboard's separate mastered metric, scoped to the global learning focus. */
+export function openMasteredCards(navigate, deckIds = []) {
+  Object.assign(listState, {
+    search: '', deckIds: [...deckIds], categoryId: '', subcategoryId: '', levelFilter: '',
+    status: 'mastered', sort: 'level', descending: false, pages: 1, selecting: false, selected: new Set(),
   });
   navigate('#/karten');
 }
