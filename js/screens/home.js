@@ -4,6 +4,7 @@
 import { on } from '../bus.js';
 import { isCloud } from '../config.js';
 import * as cloud from '../cloud/sync.js';
+import { estimateText } from '../core/pace.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
 import { errorMessage } from '../api.js';
@@ -11,7 +12,7 @@ import { readFocus, resolveFocus, saveFocus } from '../learning_focus.js';
 import { emptyState, sectionTitle, toast } from '../ui.js';
 import { clear, formatDateTime, formatDuration, greeting, h, icon, percent as formatPercent, plural, softColor, todayText } from '../util.js';
 import { openDueCards, openMasteredCards } from './cards.js';
-import { openLearnSetup } from './learn.js';
+import { openLearnSetup, plannedSessionSize } from './learn.js';
 import { openSwitchSheet } from './onboarding.js';
 import { openFocusDeckPicker, stageProgressCard } from './focus_ui.js';
 import { fetchAdvanced, openStatistics } from './statistics.js';
@@ -121,7 +122,9 @@ function render(view, ctx) {
       : total ? 'Für heute ist alles erledigt. Stark!' : 'In deinem Lernfokus sind noch keine Karten.';
     const goal = learnedToday + due;
     const percent = goal ? Math.round((learnedToday / goal) * 100) : (total ? 100 : 0);
-    const minutes = Math.max(1, Math.round(Math.min(due, 20) * 0.35));
+    // The session the CTA prepares: due cards up to the chosen session size,
+    // timed with the personal mean of the latest rated cards (summary.pace).
+    const planned = plannedSessionSize(due);
     clear(host);
     host.append(...[
     h('button', { class: 'focus-summary', type: 'button', id: 'home-focus', 'aria-haspopup': 'dialog', on: { click: focusSheet } },
@@ -140,7 +143,7 @@ function render(view, ctx) {
         id: 'home-learn',
         on: { click: () => total ? openLearnSetup({ deckIds: focusIds, dueOnly: Boolean(due), cardIds: due ? undefined : summary.card_ids, label: 'Lernfokus' }, ctx.navigate) : focusSheet() },
       }, icon('play'), !focusIds.length ? 'Lernfokus wählen' : due ? 'Jetzt lernen' : total ? 'Frei üben' : 'Lernfokus ändern'),
-      h('p', { class: 'home-cta-sub', text: due ? `${plural(Math.min(due, 20), 'Karte', 'Karten')} · ca. ${minutes} Min.` : total ? 'Keine Karte fällig – wiederhole nach Lust und Laune.' : 'Dein Lernfokus bestimmt Kennzahlen und Lernfortschritt.' })),
+      h('p', { class: 'home-cta-sub', id: 'home-estimate', text: due ? `${plural(planned, 'Karte', 'Karten')} · ${estimateText(planned, summary.pace)}` : total ? 'Keine Karte fällig – wiederhole nach Lust und Laune.' : 'Dein Lernfokus bestimmt Kennzahlen und Lernfortschritt.' })),
     syncWidget(ctx),
     isCloud() ? null : (sync.status.pending
       ? h('p', { class: 'banner' }, icon('clock', 'icon-sm'), `${plural(sync.status.pending, 'Bewertung wartet', 'Bewertungen warten')} auf Übertragung.`)

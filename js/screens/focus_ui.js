@@ -47,24 +47,37 @@ export function openFocusDeckPicker({ selected = [], title = 'Lernfokus', onAppl
   return sheet;
 }
 
+// Shown values never round up into the next stage: 1.999 reads "Ø Level 1,99"
+// and 99.9 % reads "99 %". The epsilon only absorbs binary float noise.
+export function formatAverageLevel(value) {
+  return (Math.floor(Number(value) * 100 + 1e-9) / 100).toFixed(2).replace('.', ',');
+}
+
+function wholePercent(value) {
+  return Math.min(100, Math.max(0, Math.floor((Number(value) || 0) + 1e-9)));
+}
+
 export function stageProgressCard(stage, { id = 'stage-progress', deckCount = null, onClick = null, context = 'Lernfokus' } = {}) {
   const value = Math.min(100, Math.max(0, Number(stage?.progress_percent) || 0));
+  const shown = wholePercent(value);
   const empty = !stage || stage.empty;
   const title = empty ? `Keine Karten ${context === 'Lernfokus' ? 'im Lernfokus' : 'in der Auswahl'}` : stage.all_mastered ? 'Alle Karten gemeistert' : `Stufe ${stage.current_stage}`;
-  const direction = empty ? 'Wähle Decks mit Karten für deinen Lernfortschritt.' : stage.all_mastered ? 'Dein Lernfokus ist vollständig gekonnt.' : stage.target === 'mastered' ? 'Richtung Gekonnt' : `Richtung Level ${stage.next_stage}`;
+  const direction = empty ? 'Wähle Decks mit Karten für deinen Lernfortschritt.' : stage.all_mastered ? 'Dein Lernfokus ist vollständig gekonnt.' : stage.target === 'mastered' ? 'Richtung Gekonnt' : `Richtung Stufe ${stage.next_stage}`;
+  const average = !empty && Number.isFinite(Number(stage.average_level)) && stage.average_level !== null ? `Ø Level ${formatAverageLevel(stage.average_level)}` : null;
+  const footer = [average, deckCount === null ? null : `Lernfokus: ${plural(deckCount, 'Deck', 'Decks')}`].filter(Boolean).join(' · ');
   const root = h(onClick ? 'button' : 'section', {
     class: `card stage-card${onClick ? ' stage-card-link' : ''}`, id,
     type: onClick ? 'button' : undefined,
-    'aria-label': onClick ? `Lernfortschritt: ${title}. ${Math.round(value)} Prozent. Fortschritt anzeigen` : undefined,
+    'aria-label': onClick ? `Lernfortschritt: ${title}${average ? `, ${average}` : ''}. ${empty ? '' : `${shown} Prozent, ${direction}. `}Fortschritt anzeigen` : undefined,
     on: onClick ? { click: onClick } : undefined,
   },
   h('span', { class: 'stage-eyebrow', text: 'Lernfortschritt' }),
   h('span', { class: 'stage-heading' }, h('span', { class: 'stage-title', text: title }), onClick ? icon('chevron-right') : icon(stage?.all_mastered ? 'star' : 'chart')),
   empty ? null : h('span', { class: 'stage-bar-row' },
-    h('span', { class: 'progress', role: 'progressbar', 'aria-label': direction, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(value) },
+    h('span', { class: 'progress', role: 'progressbar', 'aria-label': direction, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(shown) },
       h('span', { class: 'progress-bar', vars: { '--value': `${value}%`, '--bar-color': 'var(--area-strong)' } })),
-    h('span', { class: 'stage-percent', text: `${Math.round(value)} %` })),
+    h('span', { class: 'stage-percent', text: `${shown} %` })),
   h('span', { class: 'small muted', text: direction }),
-  deckCount === null ? null : h('span', { class: 'tiny muted', text: `Lernfokus · ${plural(deckCount, 'Deck', 'Decks')}` }));
+  footer ? h('span', { class: 'tiny muted stage-footer', text: footer }) : null);
   return root;
 }

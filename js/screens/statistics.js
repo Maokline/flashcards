@@ -7,7 +7,7 @@ import { readFocus, resolveFocus } from '../learning_focus.js';
 import { emptyState, openSheet, sectionTitle, segmented, toast } from '../ui.js';
 import { clear, formatDate, formatDuration, h, icon, percent, plural, softColor, tzOffset } from '../util.js';
 import { openLearnSetup } from './learn.js';
-import { openFocusDeckPicker, stageProgressCard } from './focus_ui.js';
+import { formatAverageLevel, openFocusDeckPicker, stageProgressCard } from './focus_ui.js';
 
 const TABS = [
   { value: 'overview', label: 'Übersicht' }, { value: 'progress', label: 'Fortschritt' },
@@ -16,6 +16,8 @@ const TABS = [
 const PERIODS = [{ value: '7', label: '7 Tage' }, { value: '30', label: '30 Tage' }, { value: '90', label: '90 Tage' }, { value: 'all', label: 'Gesamt' }];
 const PAGE_SIZE = 20;
 let pendingOpen = null;
+// Server mode offline: the last pace the server reported (RAM only).
+let lastPace = null;
 
 /** Dashboard drilldowns enter the chosen tab without a second navigation route. */
 export function openStatistics(navigate, options = {}) {
@@ -28,10 +30,13 @@ export async function fetchAdvanced({ deckIds, days = '30', categoryId = '' }) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (zone) query.set('tz_name', zone);
   if (categoryId) query.set('category_id', categoryId);
-  try { return await api.get(`/api/statistics/advanced?${query}`); }
-  catch (error) {
+  try {
+    const result = await api.get(`/api/statistics/advanced?${query}`);
+    if (result && result.pace) lastPace = result.pace;
+    return result;
+  } catch (error) {
     if (!(error instanceof NetworkError)) throw error;
-    return { ...advanced({ cards: store.cards(), decks: store.decks(), categories: store.categoriesOf(null), events: [...store.state.events.values()], deckIds, days: days === 'all' ? null : Number(days), categoryId: categoryId || null }), offline: true };
+    return { ...advanced({ cards: store.cards(), decks: store.decks(), categories: store.categoriesOf(null), events: [...store.state.events.values()], deckIds, days: days === 'all' ? null : Number(days), categoryId: categoryId || null }), pace: lastPace, offline: true };
   }
 }
 
@@ -211,7 +216,7 @@ export function renderStatistics(view, ctx) {
         clear(list);
         list.append(...decks.slice(0, count).map((deck) => h('section', { class: 'card stack comparison-card', dataset: { deck: deck.deck_id }, vars: { '--deck-color': deck.color || '#3F64DF', '--deck-soft': softColor(deck.color || '#3F64DF', 0.14) } },
           h('div', { class: 'row' }, h('span', { class: 'deck-icon' }, icon('layers')), h('div', { class: 'deck-main' },
-            h('h3', { class: 'deck-name', text: deck.deck_name }), h('p', { class: 'deck-meta', text: `${plural(deck.total_cards, 'Karte', 'Karten')} · Ø Level ${Number(deck.average_level || 0).toFixed(1).replace('.', ',')}` }))),
+            h('h3', { class: 'deck-name', text: deck.deck_name }), h('p', { class: 'deck-meta', text: `${plural(deck.total_cards, 'Karte', 'Karten')} · Ø Level ${formatAverageLevel(deck.average_level || 0)}` }))),
           h('div', { class: 'row-wrap' }, h('span', { class: 'chip chip-due', text: `${deck.due_cards} fällig` }), h('span', { class: 'chip chip-mastered', text: `${deck.mastered_cards} gekonnt` }), h('span', { class: 'chip', text: `${percent(deck.accuracy)} Treffer` })),
           h('p', { class: 'small muted', text: `Lernzeit ${formatDuration(deck.learning_seconds)} · im gewählten Zeitraum` }),
           h('button', { class: 'btn btn-soft btn-block', type: 'button', disabled: !deck.total_cards, on: { click: () => learnGroup(deck.card_ids || [], deck.deck_name, ctx.navigate) } }, icon('play', 'icon-sm'), 'Diese Karten lernen'))));

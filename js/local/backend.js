@@ -15,6 +15,7 @@ import { levelRanges, MASTERED_POINTS } from '../core/engine.js';
 import { selectSessionCards } from '../core/selection.js';
 import * as statistics from '../core/statistics.js';
 import { getFocus, setFocus } from '../core/learning_focus.js';
+import { localPace } from '../pace.js';
 import { on } from '../bus.js';
 import { utcIso } from '../core/time.js';
 import * as cloud from '../cloud/sync.js';
@@ -127,7 +128,8 @@ async function route(method, parts, query, json, form) {
         categoryId: query.get('category_id') || null, days, now,
       }));
     }
-    return structuredClone(advancedCache.get(key));
+    // The pace spans all ratings, independent of the filters (server: same field).
+    return { ...structuredClone(advancedCache.get(key)), pace: localPace() };
   }
   if (area === 'meta' && method === 'GET') {
     return { app: 'FlashCard App V2', app_version: cloud.status.label || 'Cloud', levels: levelRanges(), mastered_points: MASTERED_POINTS, server_time: utcIso() };

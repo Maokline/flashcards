@@ -89,6 +89,11 @@ async function candidateIds(values) {
   }
 }
 
+/** How many of `available` candidates a session with this limit takes. */
+export function plannedSessionSize(available, limit = filters.limit) {
+  return limit === 'all' || limit === null || limit === undefined ? available : Math.min(available, Math.max(0, Number(limit) || 0));
+}
+
 /** The session's cards: every candidate in the chosen order, then the limit. */
 export function arrangeSession(ids, { order = DEFAULT_ORDER, limit = 'all', seed = 0, now = Date.now() } = {}) {
   const cards = [...new Set(ids)].map((id) => store.card(id)).filter(Boolean);
@@ -110,7 +115,8 @@ export function startWithIds(ids, navigate, config = null) {
     index: 0,
     revealed: false,
     busy: false,
-    shownAt: Date.now(),
+    // Active handling time of the card at `index` (see "answer time" below).
+    clock: { index: -1, spent: 0, since: null },
     attempts: [],
     retries: new Map(),
     finished: false,
@@ -122,6 +128,43 @@ export function startWithIds(ids, navigate, config = null) {
   (navigate || navigateRef)('#/lernen/session');
   return true;
 }
+
+// -- answer time -----------------------------------------------------------------
+// What a rating stores as `duration_seconds`: the time the card was really on
+// screen, from showing the question to the final rating (reading, thinking,
+// revealing, checking). Monotonic clock (performance.now) and event-driven:
+// it pauses while the page is hidden (app switch, locked phone) or the
+// session screen is left, and resumes when the card is shown again. No timer
+// runs; the rating reads the elapsed time once. Unrated cards (session ended,
+// card deleted, app closed) never produce a value.
+const clockNow = () => performance.now();
+let cardOnScreen = false;
+
+function startCardClock() {
+  const clock = session.clock;
+  if (clock.index !== session.index) Object.assign(clock, { index: session.index, spent: 0, since: null });
+  cardOnScreen = true;
+  if (clock.since === null && document.visibilityState !== 'hidden') clock.since = clockNow();
+}
+
+function pauseCardClock() {
+  const clock = session && session.clock;
+  if (clock && clock.since !== null) {
+    clock.spent += clockNow() - clock.since;
+    clock.since = null;
+  }
+}
+
+function cardSeconds() {
+  const { spent, since } = session.clock;
+  return Math.round((spent + (since === null ? 0 : clockNow() - since)) / 100) / 10;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') pauseCardClock();
+  else if (cardOnScreen && session && !session.finished) startCardClock();
+});
+window.addEventListener('pagehide', pauseCardClock);
 
 /** Read-only view of the running session (diagnostics and tests). */
 export function sessionInfo() {
@@ -308,7 +351,7 @@ function renderSetup(view, ctx) {
       : filters.subcategoryId ? scoped.subcategories.get(filters.subcategoryId) || 0
         : filters.categoryId ? scoped.categories.get(filters.categoryId) || 0
           : scoped.total;
-    const planned = filters.limit === 'all' ? available : Math.min(available, Number(filters.limit));
+    const planned = plannedSessionSize(available);
     const decks = deckSummary(filters.deckIds);
     const order = ORDERS.find((item) => item.value === filters.order) || ORDERS[0];
 
@@ -419,7 +462,7 @@ async function rate(correct, rerender, { swiped = false } = {}) {
     card_id: entry.id,
     correct,
     immediate_retry: entry.retry,
-    duration_seconds: Math.round((Date.now() - session.shownAt) / 100) / 10,
+    duration_seconds: cardSeconds(),
     reviewed_at: new Date().toISOString(),
   };
   const attempt = {
@@ -462,7 +505,6 @@ async function rate(correct, rerender, { swiped = false } = {}) {
   session.index += 1;
   session.revealed = false;
   session.busy = false;
-  session.shownAt = Date.now();
   if (session.index >= session.queue.length) session.finished = true;
   setTimeout(rerender, flashcard ? 150 : 0);
 }
@@ -500,6 +542,7 @@ function renderSession(view, ctx) {
     if (!active || location.hash !== '#/lernen/session') return;
     clear(view);
     keyHandler = null;
+    cardOnScreen = false;
     if (!session) return;
     if (session.finished) renderSummary(view, ctx);
     else keyHandler = renderCard(view, ctx, rerender);
@@ -510,6 +553,8 @@ function renderSession(view, ctx) {
   return {
     cleanup: () => {
       active = false;
+      cardOnScreen = false;
+      pauseCardClock();
       document.removeEventListener('keydown', keys);
     },
     onData: () => {},
@@ -526,6 +571,7 @@ function renderCard(view, ctx, rerender) {
     requestAnimationFrame(rerender);
     return null;
   }
+  startCardClock();
   const total = session.queue.length;
   const position = session.index + 1;
   const percent = Math.round((session.index / total) * 100);

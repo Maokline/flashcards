@@ -9,21 +9,28 @@ const byId = (a, b) => id(a.id) < id(b.id) ? -1 : id(a.id) > id(b.id) ? 1 : 0;
 const dayKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const secondsOf = (event) => Math.max(0, Number(event.duration_seconds) || 0);
 
+// Stage = floor(mean effective level), progress = its fractional part; mastered
+// cards count as level 10 and from a mean of 10 on the progress is the share of
+// mastered cards. Integer arithmetic on the level sum keeps both exact, so
+// 1.999… stays stage 1 and 2.0 is stage 2 (Python: stage_progress).
 export function stageProgress(cards) {
-  const total = cards.length;
-  if (!total) return { current_stage: null, next_stage: null, target: null,
-    progress_percent: 0, reached_cards: 0, total_cards: 0, all_mastered: false, empty: true };
-  let current = 10;
-  let allMastered = true;
+  let total = 0;
+  let sum = 0;
+  let mastered = 0;
   for (const card of cards) {
-    current = Math.min(current, levelOf(card));
-    allMastered = allMastered && Boolean(card.mastered);
+    total += 1;
+    sum += levelOf(card);
+    if (card.mastered) mastered += 1;
   }
-  const next = current === 10 ? null : current + 1;
-  const reached = cards.filter((card) => current === 10 ? Boolean(card.mastered) : levelOf(card) >= next).length;
-  return { current_stage: current, next_stage: next, target: current === 10 ? 'mastered' : 'level',
-    progress_percent: percent(reached, total), reached_cards: reached, total_cards: total,
-    all_mastered: allMastered, empty: false };
+  if (!total) return { current_stage: null, next_stage: null, target: null, average_level: null,
+    progress_percent: 0, mastered_cards: 0, total_cards: 0, all_mastered: false, empty: true };
+  const remainder = sum % total;
+  const current = (sum - remainder) / total;
+  const toMastered = current === 10;
+  return { current_stage: current, next_stage: toMastered ? null : current + 1,
+    target: toMastered ? 'mastered' : 'level', average_level: sum / total,
+    progress_percent: (toMastered ? mastered : remainder) * 100 / total,
+    mastered_cards: mastered, total_cards: total, all_mastered: mastered === total, empty: false };
 }
 
 function historyOf(card) {

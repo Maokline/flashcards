@@ -12,6 +12,7 @@ import { levelRanges, MASTERED_POINTS } from './core/engine.js';
 import * as statistics from './core/statistics.js';
 import * as cloud from './cloud/sync.js';
 import * as server from './sync-server.js';
+import { recordLocalRating } from './pace.js';
 import { setMeta, setSummary, state } from './store.js';
 
 export const status = new Proxy({}, {
@@ -50,6 +51,7 @@ export async function loadMeta() {
 export async function submitReview(event) {
   if (!isCloud()) return server.submitReview(event);
   const outcome = await dataset.review(event);
+  if (outcome.status === 'applied') recordLocalRating(event.duration_seconds);
   emit('review-synced', outcome);
   return outcome;
 }
