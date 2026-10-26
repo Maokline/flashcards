@@ -8,6 +8,7 @@
 // (exhaustively for the point formulas, plus long random review sequences).
 
 import { addDays, pythonUtc, toMillis, utcIso } from './time.js';
+import { SECONDS_PER_DAY, regularIntervalSeconds } from './intervals.js';
 
 export const MASTERED_POINTS = 351;
 
@@ -33,6 +34,7 @@ export function levelForPoints(points) {
   return level;
 }
 
+/** The standard interval (linear, 1×) in whole days; decks may use another setting. */
 export function normalIntervalDays(level) {
   return Math.min(10, Math.max(1, int(level)));
 }
@@ -119,10 +121,11 @@ function randint(start, end) {
 }
 
 /**
- * Correct answer.  `now` is a millisecond timestamp.  Returns
+ * Correct answer.  `now` is a millisecond timestamp, `intervals` the deck's
+ * interval setting (intervals.js; null = standard).  Returns
  * `{card, correct, points_change, retry_after_cards, immediate_retry}`.
  */
-export function processCorrect(card, now = Date.now(), { immediateRetry = false } = {}) {
+export function processCorrect(card, now = Date.now(), { immediateRetry = false, intervals = null } = {}) {
   const reviewed = now;
   const reviewedText = utcIso(reviewed);
   const history = trimHistory([...(card.success_history || []), true]);
@@ -154,12 +157,20 @@ export function processCorrect(card, now = Date.now(), { immediateRetry = false 
     recoveryMode = false;
     nextReview = null;
   } else if (recoveryMode) {
-    const normal = normalIntervalDays(newLevel);
-    recoveryInterval = Math.min(recoveryInterval * 2, normal);
-    recoveryMode = recoveryInterval < normal;
-    nextReview = utcIso(addDays(reviewed, recoveryInterval));
+    // Recovery doubles 1 → 2 → 4 → … days up to the deck's regular interval
+    // of the new level; reaching it ends recovery.
+    const regular = regularIntervalSeconds(newLevel, intervals);
+    const doubled = recoveryInterval * 2;
+    if (doubled * SECONDS_PER_DAY < regular) {
+      recoveryInterval = doubled;
+      nextReview = utcIso(addDays(reviewed, doubled));
+    } else {
+      recoveryInterval = Math.min(doubled, Math.max(1, Math.floor(regular / SECONDS_PER_DAY)));
+      recoveryMode = false;
+      nextReview = utcIso(reviewed + regular * 1000);
+    }
   } else {
-    nextReview = utcIso(addDays(reviewed, normalIntervalDays(newLevel)));
+    nextReview = utcIso(reviewed + regularIntervalSeconds(newLevel, intervals) * 1000);
   }
 
   const updated = normalizeCard({

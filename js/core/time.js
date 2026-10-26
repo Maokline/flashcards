@@ -71,6 +71,20 @@ export function addDays(millis, days) {
   return millis + days * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * `text` + whole seconds as Python writes it (`datetime_to_text(value +
+ * timedelta(seconds=n))`): microseconds of the original survive, although
+ * JavaScript dates only know milliseconds.
+ */
+export function addSecondsToText(text, seconds) {
+  const normal = pythonUtc(text);
+  if (normal === null) return null;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{6})?\+00:00$/.exec(normal);
+  if (!match) return null;
+  const whole = utcIso(Date.parse(`${match[1]}Z`) + Math.trunc(seconds) * 1000).slice(0, 19);
+  return `${whole}${match[2] || ''}+00:00`;
+}
+
 /** Exclusive end of the local calendar day; Date handles DST at midnight. */
 export function dueDayEnd(now = Date.now()) {
   const end = new Date(toMillis(now));

@@ -50,6 +50,7 @@ function renderMenu(view) {
     profileCard(),
     h('div', { class: 'menu-list' },
       menuItem('#/mehr/statistik', 'chart', 'tone-apricot', 'Statistik', 'Fortschritt, Erfolgsquote, Lernzeit', 'more-stats'),
+      menuItem('#/mehr/intervalle', 'clock', 'tone-mint', 'Wiederholungsintervalle', 'Abstände je Deck: Modell, Multiplikator, Höchstwert', 'more-intervals'),
       isCloud() ? menuItem('#/mehr/sync', 'swap', 'tone-learn', 'Sync & Geräte', `Aktives Gerät, Gerätewechsel, ${cloud.status.label}`, 'more-sync') : null,
       menuItem('#/mehr/einstellungen', 'settings', 'tone-slate', 'Einstellungen', isCloud() ? 'App installieren, Über die App' : 'Gerät, Synchronisation, Abmelden', 'more-settings'),
       menuItem('#/mehr/daten', 'database', 'tone-blue', 'Daten / Backup', isCloud() ? `Sicherungen in ${cloud.status.label}` : 'Sicherungen erstellen und herunterladen', 'more-data')),

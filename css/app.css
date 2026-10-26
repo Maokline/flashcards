@@ -1013,6 +1013,13 @@ a { color: var(--area-text); }
 .kv-row dt { color: var(--muted); font-weight: 650; }
 .kv-row dd { margin: 0; font-weight: 750; text-align: right; overflow-wrap: anywhere; min-width: 0; }
 .kv-compact .kv-row { padding: 8px 0; font-size: 14.5px; }
+
+/* Wiederholungsintervalle: deck list and the live preview of levels 1–10. */
+.deck-card > .icon:last-child { flex: none; color: var(--faint); }
+.interval-preview .kv-row dd { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 2px 8px; }
+.interval-detail { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.interval-preview .kv-row.is-capped .interval-value { color: var(--warning-text); }
+.interval-cap { padding: 1px 8px; font-size: 12px; }
 .backup-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
 .backup-row:first-child { border-top: 0; }
 .backup-row .deck-main { min-width: 0; }

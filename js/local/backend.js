@@ -12,6 +12,7 @@ import { DraftError, DraftInbox, imageType } from '../core/aidrafts.js';
 import { exportTest, START_TEXT } from '../core/aitest.js';
 import * as dataset from '../core/dataset.js';
 import { levelRanges, MASTERED_POINTS } from '../core/engine.js';
+import { apiFields, settingsOf } from '../core/intervals.js';
 import { selectSessionCards } from '../core/selection.js';
 import * as statistics from '../core/statistics.js';
 import { getFocus, setFocus } from '../core/learning_focus.js';
@@ -37,6 +38,8 @@ function parse(path) {
 }
 
 const notFound = () => new ApiError(404, { error: 'not_found', message: 'Nicht gefunden.' });
+const INTERVAL_KEYS = ['interval_model', 'interval_multiplier_pct', 'interval_max_days'];
+const deckView = (deck) => ({ ...deck, ...apiFields(settingsOf(deck)), version: 1 });
 const advancedCache = new Map();
 on('data-changed', () => advancedCache.clear());
 on('local-change', () => advancedCache.clear());
@@ -148,6 +151,32 @@ async function route(method, parts, query, json, form) {
     return { card_ids: chosen.map((card) => card.id), available: selected.length };
   }
   if (area === 'reviews' && method === 'POST' && !rest.length) return dataset.review(json);
+  if (area === 'decks' && rest.length >= 1) {
+    if (rest.length === 1 && method === 'PATCH') {
+      const { base_version: _v, ...changes } = json || {};
+      const unknown = Object.keys(changes).filter((key) => !INTERVAL_KEYS.includes(key));
+      if (unknown.length) throw new ApiError(422, { error: 'validation', message: 'Am Handy lassen sich nur die Wiederholungsintervalle eines Decks ändern.' });
+      return deckView(await dataset.updateDeckIntervals(rest[0], changes));
+    }
+    if (rest.length === 2 && rest[1] === 'reschedule' && method === 'POST') {
+      const token = json && json.token;
+      if (!token) return { applied: false, ...dataset.planReschedule(rest[0]) };
+      let backup = null;
+      const plan = await dataset.applyReschedule(rest[0], token, {
+        // A cloud backup of the current state comes first; without it the
+        // due dates stay unchanged.
+        beforeWrite: async () => {
+          try {
+            await cloud.commit();
+            backup = (await cloud.createRemoteBackup('vor Neuberechnung')).name;
+          } catch (error) {
+            throw new ApiError(503, { error: 'backup_failed', message: `Vor der Neuberechnung muss eine Sicherung in ${cloud.status.label || 'der Cloud'} entstehen – das ist gerade nicht möglich (${error.message || 'keine Verbindung'}). Es wurde nichts geändert.` });
+          }
+        },
+      });
+      return { applied: true, backup, ...plan };
+    }
+  }
   if (area === 'cards') {
     if (!rest.length && method === 'POST') return dataset.createCard(json || {});
     if (rest[0] === 'bulk' && method === 'POST') return dataset.bulk(json || {});

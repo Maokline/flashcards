@@ -12,6 +12,7 @@ import * as db from '../db.js';
 import { state } from '../store.js';
 import { sha256Hex } from './canonical.js';
 import { MASTERED_POINTS, effectiveTime, learningStateJson, normalizeCard, processCorrect, processIncorrect } from './engine.js';
+import { lastEvents, parseSettings, planReschedule as planDeckReschedule, planToken, sameSettings, settingsOf, snapshotFields } from './intervals.js';
 import { utcIso } from './time.js';
 
 export const CARD_FIELDS = [
@@ -21,6 +22,8 @@ export const CARD_FIELDS = [
   'consecutive_incorrect_attempts', 'last_reviewed', 'next_review', 'recovery_mode', 'recovery_interval',
 ];
 const DECK_FIELDS = ['id', 'name', 'description', 'color', 'created_at', 'updated_at'];
+// Optional deck fields of the interval setting (absent = linear, 1×, 180 days).
+const INTERVAL_KEYS = ['interval_model', 'interval_multiplier_pct', 'interval_max_days'];
 const CATEGORY_FIELDS = ['id', 'deck_id', 'name', 'created_at', 'updated_at'];
 const SUBCATEGORY_FIELDS = ['id', 'category_id', 'name', 'created_at', 'updated_at'];
 const MEDIA_FIELDS = ['id', 'relative_path', 'original_name', 'mime_type', 'size_bytes', 'sha256', 'created_at'];
@@ -314,6 +317,70 @@ export async function bulk({ action, card_ids: ids = [], deck_id: deckId, catego
   return { action, affected: unique.length };
 }
 
+// -- review intervals per deck ---------------------------------------------------------
+/** Store a deck's interval setting; it applies to future reviews only. */
+export async function updateDeckIntervals(deckId, payload) {
+  guard();
+  const deck = state.decks.get(deckId);
+  if (!deck) throw notFound('Deck nicht gefunden.');
+  const current = settingsOf(deck);
+  let settings;
+  try {
+    settings = parseSettings({
+      model: payload.interval_model ?? current.model,
+      multiplier_pct: payload.interval_multiplier_pct ?? current.multiplier_pct,
+      max_days: payload.interval_max_days ?? current.max_days,
+    });
+  } catch (error) {
+    throw invalid(error.message);
+  }
+  if (sameSettings(settings, current)) return deck;
+  const next = { ...deck, updated_at: now() };
+  for (const key of INTERVAL_KEYS) delete next[key];
+  Object.assign(next, snapshotFields(settings));
+  await apply({ put: { decks: [next] } });
+  return state.decks.get(deckId);
+}
+
+function deckPlan(deckId) {
+  const deck = state.decks.get(deckId);
+  if (!deck) throw notFound('Deck nicht gefunden.');
+  const cards = [...state.cards.values()].filter((card) => card.deck_id === deckId);
+  const latest = lastEvents(state.events.values(), cards.map((card) => card.id));
+  const plan = planDeckReschedule(deckId, cards, latest, settingsOf(deck), Date.now());
+  return { ...plan, token: planToken(plan) };
+}
+
+/** Preview of a recalculation of existing due dates (nothing is written). */
+export function planReschedule(deckId) {
+  const plan = deckPlan(deckId);
+  return { ...plan, changes: plan.changes.map(({ newMillis: _n, oldMillis: _o, ...item }) => item) };
+}
+
+/**
+ * Apply a confirmed preview: only next_review/updated_at of the planned
+ * cards change.  `beforeWrite` runs after the plan was verified (backup).
+ */
+export async function applyReschedule(deckId, token, { beforeWrite = null } = {}) {
+  guard();
+  if (!token) throw invalid('Die Neuberechnung braucht eine bestätigte Vorschau.');
+  const stale = 'Die Vorschau ist nicht mehr aktuell – bitte die Auswirkungen erneut prüfen.';
+  let plan = deckPlan(deckId);
+  if (plan.token !== token) throw invalid(stale);
+  if (plan.changes.length && beforeWrite) {
+    await beforeWrite(plan);
+    plan = deckPlan(deckId);
+    if (plan.token !== token) throw invalid(stale);
+  }
+  if (plan.changes.length) {
+    guard();
+    const stamp = now();
+    const cards = plan.changes.map((item) => viewCard({ ...state.cards.get(item.card_id), next_review: item.new_next_review, updated_at: stamp }));
+    await apply({ put: { cards } });
+  }
+  return { ...plan, changes: plan.changes.map(({ newMillis: _n, oldMillis: _o, ...item }) => item) };
+}
+
 // -- reviews ----------------------------------------------------------------------
 function nextEventId() {
   let max = 0;
@@ -328,7 +395,8 @@ export async function review({ event_id: eventId, card_id: cardId, correct, imme
   if (!previous) return { event_id: eventId, card_id: cardId, status: 'rejected', duplicate: false, reason: 'card_not_found' };
   const retry = Boolean(correct && immediateRetry);
   const moment = effectiveTime(reviewedAt, previous, Date.now());
-  const result = correct ? processCorrect(previous, moment, { immediateRetry: retry }) : processIncorrect(previous, moment);
+  const intervals = settingsOf(state.decks.get(previous.deck_id));
+  const result = correct ? processCorrect(previous, moment, { immediateRetry: retry, intervals }) : processIncorrect(previous, moment);
   const card = viewCard(result.card);
   const event = {
     id: nextEventId(),
@@ -464,7 +532,9 @@ export async function savePending(pending) {
 // -- snapshot ------------------------------------------------------------------------------
 export function exportDataset() {
   const byId = (rows, fields) => rows.map((row) => pick(row, fields)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const decks = byId([...state.decks.values()], DECK_FIELDS).map((deck) => ({ ...deck, description: deck.description || '' }));
+  const decks = [...state.decks.values()]
+    .map((deck) => ({ ...pick(deck, DECK_FIELDS), description: deck.description || '', ...snapshotFields(settingsOf(deck)) }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const media = byId([...state.media.values()], MEDIA_FIELDS).map((item) => ({ ...item, size_bytes: Number(item.size_bytes) || 0 }));
   const cards = [...state.cards.values()].map(snapshotCard).sort((a, b) => (a.id < b.id ? -1 : 1));
   const files = Object.fromEntries([...state.files.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([path, entry]) => [path, { sha256: entry.sha256, size: Number(entry.size) || 0 }]));

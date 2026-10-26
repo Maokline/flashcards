@@ -3,11 +3,12 @@
 // identical inputs to both implementations and compares the results.
 
 import { learningStateJson, processCorrect, processIncorrect } from './engine.js';
+import { INTERVAL_FIELDS, settingsOf } from './intervals.js';
 import { later, toMillis, utcIso } from './time.js';
 
 const CARD_CONTENT_FIELDS = ['deck_id', 'question', 'answer', 'category', 'category_id', 'subcategory', 'subcategory_id', 'question_images', 'answer_images'];
 const LEARNING_FIELDS = ['points', 'level', 'mastered', 'positive_streak', 'negative_streak', 'success_history', 'total_incorrect_count', 'consecutive_incorrect_attempts', 'last_reviewed', 'next_review', 'recovery_mode', 'recovery_interval'];
-const DECK_KEYS = ['name', 'description', 'color', 'created_at', 'updated_at'];
+const DECK_KEYS = ['name', 'description', 'color', 'created_at', 'updated_at', ...INTERVAL_FIELDS];
 const CATEGORY_KEYS = ['deck_id', 'name', 'created_at', 'updated_at'];
 const SUBCATEGORY_KEYS = ['category_id', 'name', 'created_at', 'updated_at'];
 const MEDIA_KEYS = ['relative_path', 'original_name', 'mime_type', 'size_bytes', 'sha256', 'created_at'];
@@ -44,7 +45,7 @@ function threeWay(base, local, remote, keys, report) {
 
 const learning = (card) => (card ? Object.fromEntries(LEARNING_FIELDS.map((key) => [key, card[key] ?? null])) : null);
 
-export function replayReviews(cardData, events, firstId) {
+export function replayReviews(cardData, events, firstId, intervals = null) {
   let card = { ...cardData };
   const newEvents = [];
   let nextId = firstId;
@@ -56,7 +57,7 @@ export function replayReviews(cardData, events, firstId) {
     const previous = card;
     const correct = Boolean(event.correct);
     const retry = Boolean(correct && event.immediate_retry);
-    const result = correct ? processCorrect(previous, reviewed, { immediateRetry: retry }) : processIncorrect(previous, reviewed);
+    const result = correct ? processCorrect(previous, reviewed, { immediateRetry: retry, intervals }) : processIncorrect(previous, reviewed);
     card = result.card;
     newEvents.push({
       id: nextId,
@@ -95,6 +96,10 @@ export function mergeDatasets(base, local, remote) {
       if (value) result.set(id, value);
     }
     merged[name] = result;
+  }
+  // Interval fields are optional (absent = default): no empty keys.
+  for (const deck of merged.decks.values()) {
+    for (const key of INTERVAL_FIELDS) if (deck[key] === undefined || deck[key] === null) delete deck[key];
   }
 
   const bCards = byId(base.core.cards);
@@ -184,7 +189,7 @@ export function mergeDatasets(base, local, remote) {
       report.replayed_reviews += events.length;
       continue;
     }
-    const result = replayReviews(cards.get(cardId), events, nextId);
+    const result = replayReviews(cards.get(cardId), events, nextId, settingsOf(merged.decks.get(String(cards.get(cardId).deck_id))));
     cards.set(cardId, result.card);
     nextId += result.events.length;
     replayed.push(...result.events);

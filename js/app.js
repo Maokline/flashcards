@@ -27,10 +27,11 @@ import cardsScreen from './screens/cards.js';
 import editor from './screens/editor.js';
 import ai from './screens/ai.js';
 import more from './screens/more.js';
+import decks from './screens/decks.js';
 import device from './screens/device.js';
 import onboarding, { openConflictSheet, openEmptyCloudSheet, openMovedSheet, openSwitchSheet } from './screens/onboarding.js';
 
-export const APP_VERSION = '2.1.0';
+export const APP_VERSION = '2.2.0';
 
 const TABS = [
   { key: 'start', label: 'Start', icon: 'home', hash: '#/start' },
@@ -55,6 +56,7 @@ const ROUTES = [
   [/^\/mehr\/statistik$/, more.statistics],
   [/^\/mehr\/einstellungen$/, more.settings],
   [/^\/mehr\/daten$/, more.data],
+  [/^\/mehr\/intervalle$/, decks.list],
   [/^\/mehr\/sync$/, device.page],
 ];
 
@@ -544,7 +546,7 @@ async function startApp() {
 }
 
 // Screens where a quick sign-in redirect loses nothing (no form, no session).
-const SAFE_TO_LEAVE = /^#\/(start|lernen|karten|ki|mehr)(\/(sync|statistik|daten|einstellungen))?$/;
+const SAFE_TO_LEAVE = /^#\/(start|lernen|karten|ki|mehr)(\/(sync|statistik|daten|einstellungen|intervalle))?$/;
 
 /** Back in the foreground after a while: renew an expired web sign-in, then switch. */
 async function onResume() {

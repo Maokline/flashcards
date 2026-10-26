@@ -11,7 +11,7 @@
 
 // The sync server and tools/build_pwa.py replace this value with a content
 // hash of all app files, so every release is a new service worker version.
-const VERSION = '30f79e8e2646';
+const VERSION = '1c4c069a9368';
 const SHELL_CACHE = `fc-shell-${VERSION}`;
 const MEDIA_CACHE = 'fc-media-v1';
 const MEDIA_LIMIT = 600;
@@ -36,6 +36,7 @@ const PRECACHE = [
   'js/core/canonical.js',
   'js/core/dataset.js',
   'js/core/engine.js',
+  'js/core/intervals.js',
   'js/core/learning_focus.js',
   'js/core/merge.js',
   'js/core/pace.js',
@@ -56,6 +57,7 @@ const PRECACHE = [
   'js/pickers.js',
   'js/screens/ai.js',
   'js/screens/cards.js',
+  'js/screens/decks.js',
   'js/screens/device.js',
   'js/screens/editor.js',
   'js/screens/focus_ui.js',

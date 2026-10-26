@@ -26,6 +26,7 @@ import * as db from '../db.js';
 import { state } from '../store.js';
 import { decodeDocument, digestOf, encodeDocument, sha256Hex } from '../core/canonical.js';
 import * as dataset from '../core/dataset.js';
+import { INTERVAL_FIELDS } from '../core/intervals.js';
 import { mergeDatasets } from '../core/merge.js';
 import { utcIso } from '../core/time.js';
 import { deviceGuess } from '../util.js';
@@ -38,6 +39,14 @@ const ConflictError = StorageConflict;
 
 export const FORMAT = 'flashcard-app-onedrive';
 const CORE_FORMAT = 'flashcard-onedrive-core';
+// Data sets with a deck using its own interval setting carry format version 2
+// (app/cloudsync/layout.py): an older app refuses them instead of dropping
+// the setting.  Without such a deck the version stays 1.
+const SUPPORTED_FORMAT_VERSION = 2;
+
+export function datasetFormatVersion(core) {
+  return (core.decks || []).some((deck) => INTERVAL_FIELDS.some((key) => key in deck)) ? 2 : 1;
+}
 const REVIEWS_FORMAT = 'flashcard-onedrive-reviews';
 const HISTORY = 5;
 const DEVICE_KEY = 'od_device'; // shared by all providers: the device keeps its ID
@@ -315,7 +324,7 @@ async function readHead() {
   const { head, token } = await store.readHead();
   if (!head) return { head: null, etag: null };
   if (head.format !== FORMAT) throw new GraphError(`Der Sync-Kopf in ${current.label} ist beschädigt.`);
-  if (Number(head.format_version || 0) > 1) throw new GraphError(`Die Daten in ${current.label} stammen von einer neueren App-Version – bitte die App aktualisieren.`);
+  if (Number(head.format_version || 0) > SUPPORTED_FORMAT_VERSION) throw new GraphError(`Die Daten in ${current.label} stammen von einer neueren App-Version – bitte die App aktualisieren.`);
   if (head.moved_to && JSON.stringify(head.moved_to) !== JSON.stringify(sync.moved_to)) {
     sync.moved_to = head.moved_to;
     sync.lease_id = null;
@@ -489,7 +498,7 @@ async function publish({ core, events, head, etag, leaseValue, knownDigests, rem
   const document = {
     ...core,
     format: CORE_FORMAT,
-    format_version: 1,
+    format_version: datasetFormatVersion(core),
     dataset_id: datasetId,
     revision,
     exported_at: utcIso(),
@@ -501,7 +510,7 @@ async function publish({ core, events, head, etag, leaseValue, knownDigests, rem
   await store.upload(corePath, data);
   const newHead = {
     format: FORMAT,
-    format_version: 1,
+    format_version: datasetFormatVersion(core),
     sync_version: 1,
     dataset_id: datasetId,
     revision,
