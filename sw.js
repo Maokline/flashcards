@@ -11,7 +11,7 @@
 
 // The sync server and tools/build_pwa.py replace this value with a content
 // hash of all app files, so every release is a new service worker version.
-const VERSION = 'a47e0762da20';
+const VERSION = 'b8edee09672d';
 const SHELL_CACHE = `fc-shell-${VERSION}`;
 const MEDIA_CACHE = 'fc-media-v1';
 const MEDIA_LIMIT = 600;

@@ -1050,17 +1050,24 @@ a { color: var(--area-text); }
 .learn-start-bar .learn-count { text-align: center; font-size: 13.5px; }
 /* Sheet content scrolls; its rows keep their height instead of shrinking. */
 .sheet-body > .setup-row, .sheet-body > .check-list, .sheet-body > .option-list, .sheet-body > .pick-tools, .sheet-body > .field { flex-shrink: 0; }
-/* Deck shares of a weighted session: switch, one slider with a typed value
-   per deck and the preview of the cards each deck gives. */
+/* Deck shares of a weighted session: switch, per deck a typed value and a
+   slider between − and +, and the preview of the cards each deck gives. */
 .weights { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .weights .toggle {
   min-height: 56px; padding: 6px 12px 6px 14px; border-radius: 16px;
-  border: 1.5px solid var(--border-strong); background: var(--surface);
+  border: 1.5px solid var(--border-strong); background: var(--surface); cursor: default;
 }
 .weights .toggle-text { min-width: 0; font-weight: 750; overflow-wrap: anywhere; }
+/* Here only the switch (with a finger-sized area around it) reacts, not the row. */
+.switch-hit { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 64px; min-height: 44px; cursor: pointer; }
+.weights-help { font-size: 13px; font-weight: 600; color: var(--muted); }
 .weight-row { display: flex; flex-direction: column; min-width: 0; padding-top: 6px; }
 .weight-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.weight-name { flex: 1 1 auto; min-width: 0; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.weight-label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.weight-name { min-width: 0; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "festgelegt" = set by hand, stays; "automatisch" = follows the others. */
+.weight-mode { font-size: 12px; font-weight: 700; line-height: 1.25; color: var(--muted); }
+.weight-row.is-kept .weight-mode { color: var(--area-text); }
 .weight-value { flex: none; display: inline-flex; align-items: center; gap: 5px; font-weight: 800; color: var(--area-text); }
 .weight-input {
   width: 62px; min-height: 44px; padding: 6px 10px; text-align: right;
@@ -1069,10 +1076,28 @@ a { color: var(--area-text); }
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .weight-input:focus { outline: none; border-color: var(--area-accent); box-shadow: 0 0 0 4px var(--area-surface); }
+.weight-row:not(.is-kept) .weight-input { border-style: dashed; color: var(--text-soft); }
+.weight-row.is-adjusted .weight-input { border-color: var(--warning); background: var(--warning-soft); }
 .weight-input.is-incomplete { border-color: var(--warning); }
+.weight-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.weight-step {
+  flex: none; width: 44px; height: 44px; padding: 0; border-radius: 13px;
+  border: 1.5px solid var(--border-strong); background: var(--surface); color: var(--text);
+  font-size: 22px; font-weight: 700; line-height: 1; cursor: pointer; touch-action: manipulation;
+}
+.weight-step:active { background: var(--surface-sunken); }
+.weight-step[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+/* The slider is moved by js/screens/learn.js (guardSlider): only a sideways
+   drag that starts on the knob counts, so scrolling the page across it or a
+   stray touch changes nothing.  The input itself takes no pointer. */
+.weight-slide {
+  flex: 1 1 auto; min-width: 0; height: 44px; display: flex; align-items: center;
+  touch-action: pan-y; cursor: pointer; -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .weight-slider {
   -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 44px; margin: 0; padding: 0;
-  background: transparent; cursor: pointer; touch-action: pan-y; --thumb: 28px;
+  background: transparent; pointer-events: none; --thumb: 28px;
 }
 .weight-slider::-webkit-slider-runnable-track {
   height: 8px; border-radius: 999px;
@@ -1085,13 +1110,17 @@ a { color: var(--area-text); }
   border-radius: 50%; background: var(--surface); border: 2px solid var(--area-strong);
   box-shadow: 0 2px 6px rgba(18, 24, 38, 0.18); transition: transform 0.12s ease;
 }
-.weight-slider:active::-webkit-slider-thumb { transform: scale(1.08); }
+.weight-slide.is-dragging .weight-slider::-webkit-slider-thumb { transform: scale(1.14); }
 .weight-slider::-moz-range-track { height: 8px; border-radius: 999px; background: var(--surface-sunken); }
 .weight-slider::-moz-range-progress { height: 8px; border-radius: 999px; background: var(--area-strong); }
 .weight-slider::-moz-range-thumb {
-  width: 24px; height: 24px; border-radius: 50%; background: var(--surface); border: 2px solid var(--area-strong);
-  box-shadow: 0 2px 6px rgba(18, 24, 38, 0.18);
+  box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--area-strong); box-shadow: 0 2px 6px rgba(18, 24, 38, 0.18);
 }
+.weights-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.weights-sum { font-size: 13.5px; font-weight: 800; color: var(--area-text); white-space: nowrap; }
+.weights-even { flex: none; padding: 0 10px; }
+.weights-adjusted { font-size: 13px; font-weight: 650; color: var(--warning-text); }
 .weight-slider:focus-visible { outline: none; }
 .weight-slider:focus-visible::-webkit-slider-thumb { outline: 3px solid var(--focus); outline-offset: 2px; }
 .weight-slider:focus-visible::-moz-range-thumb { outline: 3px solid var(--focus); outline-offset: 2px; }

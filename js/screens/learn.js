@@ -11,11 +11,14 @@ import { isCloud } from '../config.js';
 import { cardImages, thumbGrid } from '../images.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
-import { clampPercent, combinationIds, distribute, equalWeights, findWeights, fitWeights, isValid, rebalance, selectWeightedSession, tieOrder } from '../core/deck_weights.js';
+import {
+  clampPercent, combinationIds, distribute, equalWeights, findWeights, fitWeights, gaveWay as movedDecks, isValid, keptAfter, rebalance,
+  selectWeightedSession, tieOrder,
+} from '../core/deck_weights.js';
 import { DEFAULT_ORDER, orderSessionCards } from '../core/selection.js';
 import { readWeights, saveWeights } from '../deck_weights.js';
 import { countIndex, deckSummary, fillCategorySelect, fillSubcategorySelect, normalizeDeckIds, openDeckPicker } from '../pickers.js';
-import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast, toggle } from '../ui.js';
+import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast } from '../ui.js';
 import { clear, h, icon, plural, pointsText, uuid } from '../util.js';
 
 const LIMITS = [
@@ -46,8 +49,9 @@ let navigateRef = null;
 // The shares are edited in memory only.  `drafts` keeps what was set for a
 // deck combination until a session start stores it; `saved` is the
 // synchronised document of stored combinations (js/deck_weights.js).  Nothing
-// is written while a slider moves.
-const shares = { key: '', weights: null, drafts: new Map(), saved: null };
+// is written while a slider moves.  `marks` remembers how a combination is
+// being edited (see shareMarks) – like the drafts only for this app session.
+const shares = { key: '', weights: null, drafts: new Map(), marks: new Map(), saved: null };
 
 function chosenDeckIds(values) {
   const ids = values.deckIds.length ? values.deckIds : store.decks().map((deck) => deck.id);
@@ -71,12 +75,30 @@ function activeShares(values = filters) {
   const order = tieOrder(ids.map((id) => store.deck(id)));
   const key = JSON.stringify(combinationIds(ids));
   if (shares.key !== key || !isValid(shares.weights, order)) {
-    shares.weights = shares.drafts.get(key)
+    const draft = shares.drafts.get(key);
+    // Shares that are not the user's own edits start a new round of editing.
+    if (!draft) shares.marks.delete(key);
+    shares.weights = draft
       || findWeights(shares.saved, ids)
       || (shares.key && shares.weights ? fitWeights(shares.weights, order) : equalWeights(order));
     shares.key = key;
   }
   return { ids, order, key, weights: shares.weights };
+}
+
+/**
+ * How the shares of this deck combination are being edited.  `kept` are the
+ * decks the user set by hand, oldest first: they stay as they are.  The other
+ * decks follow automatically in the proportions of `basis`, the shares before
+ * the editing began (rebalance and keptAfter in js/core/deck_weights.js).
+ */
+function shareMarks(active) {
+  let marks = shares.marks.get(active.key);
+  if (!marks || !isValid(marks.basis, active.order)) {
+    marks = { kept: [], basis: { ...active.weights } };
+    shares.marks.set(active.key, marks);
+  }
+  return marks;
 }
 
 const sameShares = (a, b, ids) => Boolean(a && b) && ids.every((id) => a[id] === b[id]);
@@ -89,19 +111,26 @@ function adoptSavedShares(document) {
   const stored = findWeights(document, ids);
   if (!stored || sameShares(stored, shares.weights, ids)) return false;
   shares.weights = stored;
+  shares.marks.delete(shares.key);
   return true;
+}
+
+/** The shares are stored: the next change starts a new round of editing. */
+function forgetDraft(key) {
+  shares.drafts.delete(key);
+  shares.marks.delete(key);
 }
 
 /** Session start: store the shares of this deck combination if they changed. */
 function rememberShares(active) {
   const weights = { ...active.weights };
   if (sameShares(findWeights(shares.saved, active.ids), weights, active.ids)) {
-    shares.drafts.delete(active.key);
+    forgetDraft(active.key);
     return;
   }
   saveWeights(weights).then((document) => {
     shares.saved = document;
-    if (sameShares(shares.drafts.get(active.key), weights, active.ids)) shares.drafts.delete(active.key);
+    if (sameShares(shares.drafts.get(active.key), weights, active.ids)) forgetDraft(active.key);
   }).catch(() => {
     // Read-only device or no connection: the shares stay in memory for this
     // app session and the next session start tries again.
@@ -113,10 +142,85 @@ function rememberShares(active) {
 export function sharesInfo() {
   const active = activeShares();
   return {
-    active: active ? { ids: [...active.ids], order: [...active.order], weights: { ...active.weights } } : null,
+    active: active ? {
+      ids: [...active.ids], order: [...active.order], weights: { ...active.weights },
+      kept: [...(shares.marks.get(active.key)?.kept || [])],
+    } : null,
     drafts: [...shares.drafts.values()].map((weights) => ({ ...weights })),
     saved: shares.saved ? structuredClone(shares.saved) : null,
   };
+}
+
+// -- share sliders that only move on purpose --------------------------------------
+const KNOB = 28;       // knob width in px (css/app.css: .weight-slider --thumb)
+const GRAB = 26;       // a touch must begin this close to the middle of the knob
+const SLOP = 8;        // sideways travel in px that turns a touch into a drag
+const SHARE_STEP = 5;  // the − / + buttons move to the next multiple of this
+
+/**
+ * Wrap a range input so that it only moves on purpose.  The native control
+ * jumps to wherever it is touched – also when the page is merely scrolled
+ * across it.  Here a touch has to begin on the knob and move sideways; a tap,
+ * a touch on the track and vertical scrolling change nothing, and a drag the
+ * system takes away is reported as cancelled.  A mouse may use the track as
+ * usual.  The input itself stays the control for keyboard and screen readers.
+ */
+function guardSlider(slider, { onStart, onDrag, onDone, onCancel }) {
+  const host = h('div', { class: 'weight-slide' }, slider);
+  let drag = null;
+  const limit = (value) => Math.max(0, Math.min(100, value));
+  const begin = (event) => {
+    drag.active = true;
+    host.classList.add('is-dragging');
+    try { host.setPointerCapture(event.pointerId); } catch { /* the pointer is already gone */ }
+    onStart();
+  };
+  const move = (event) => {
+    const next = limit(Math.round(drag.from + ((event.clientX - drag.x) / drag.span) * 100));
+    if (next === drag.value) return;
+    drag.value = next;
+    onDrag(next);
+  };
+  host.addEventListener('pointerdown', (event) => {
+    if ((drag && drag.active) || event.button > 0) return;
+    const rect = host.getBoundingClientRect();
+    const span = Math.max(1, rect.width - KNOB);
+    const value = Number(slider.value);
+    const pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, span, value, active: false };
+    if (event.pointerType === 'mouse') {
+      const from = limit(Math.round(((event.clientX - rect.left - KNOB / 2) / span) * 100));
+      drag = { ...pointer, from };
+      event.preventDefault();
+      begin(event);
+      move(event);
+      return;
+    }
+    const knob = rect.left + KNOB / 2 + (span * value) / 100;
+    if (Math.abs(event.clientX - knob) <= GRAB) drag = { ...pointer, from: value };
+  });
+  host.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (!drag.active) {
+      const dx = Math.abs(event.clientX - drag.x);
+      const dy = Math.abs(event.clientY - drag.y);
+      if (dy >= SLOP && dy >= dx) { drag = null; return; } // the page is being scrolled
+      if (dx < SLOP) return;
+      begin(event);
+    }
+    move(event);
+  });
+  const end = (event, cancelled) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const { active } = drag;
+    drag = null;
+    host.classList.remove('is-dragging');
+    if (!active) return;
+    if (cancelled) onCancel();
+    else onDone();
+  };
+  host.addEventListener('pointerup', (event) => end(event, false));
+  host.addEventListener('pointercancel', (event) => end(event, true));
+  return host;
 }
 
 function vibrate(pattern) {
@@ -500,11 +604,24 @@ function renderSetup(view, ctx) {
 
   function weightsSection(active, plan) {
     if (!sharesApplicable(filters)) return null;
-    const control = toggle('Deck-Anteile selbst festlegen', filters.weighted, { id: 'learn-weighted' });
+    // Only the switch itself reacts, not the whole row: the block below opens
+    // and closes with it, which a stray touch on the row should never do.
+    const input = h('input', {
+      type: 'checkbox', class: 'switch', role: 'switch', id: 'learn-weighted', checked: filters.weighted, 'aria-labelledby': 'learn-weighted-text',
+    });
+    const control = {
+      input,
+      element: h('div', { class: 'toggle' },
+        h('span', { class: 'toggle-text', id: 'learn-weighted-text', text: 'Deck-Anteile selbst festlegen' }),
+        h('label', { class: 'switch-hit' }, input)),
+    };
     control.input.addEventListener('change', () => {
       filters.weighted = control.input.checked;
-      // Switching on again starts from the stored (or even) shares.
-      if (!filters.weighted) Object.assign(shares, { key: '', weights: null });
+      // Switching on again starts a new round from the last (or stored) shares.
+      if (!filters.weighted) {
+        shares.marks.delete(shares.key);
+        Object.assign(shares, { key: '', weights: null });
+      }
       draw();
       if (filters.weighted) loadShares();
     });
@@ -513,11 +630,20 @@ function renderSetup(view, ctx) {
       control.element);
     if (!active) return section;
 
+    const marks = shareMarks(active);
+    const decks = store.decks().filter((item) => active.ids.includes(item.id));
+    const names = new Map(decks.map((deck) => [deck.id, deck.name]));
     const rows = new Map();
     const preview = h('div', { class: 'weights-preview', id: 'learn-weights-preview' });
-    const refresh = (source = null) => {
+    const sum = h('span', { class: 'weights-sum', id: 'learn-weights-sum' });
+    const adjusted = h('p', { class: 'weights-adjusted', id: 'learn-weights-adjusted', role: 'status', hidden: true });
+    let gaveWay = [];       // hand-set decks the last change had to move
+    const paint = (source = null) => {
+      let total = 0;
       for (const [id, row] of rows) {
         const value = shares.weights[id];
+        const kept = marks.kept.includes(id);
+        total += value;
         row.slider.value = String(value);
         row.slider.style.setProperty('--share', String(value / 100));
         row.slider.setAttribute('aria-valuetext', `${value} %`);
@@ -525,22 +651,72 @@ function renderSetup(view, ctx) {
           row.input.value = String(value);
           row.input.classList.remove('is-incomplete');
         }
+        row.element.classList.toggle('is-kept', kept);
+        row.element.classList.toggle('is-adjusted', gaveWay.includes(id));
+        row.mode.textContent = kept ? 'festgelegt' : 'automatisch';
+        row.minus.setAttribute('aria-disabled', String(value <= 0));
+        row.plus.setAttribute('aria-disabled', String(value >= 100));
       }
+      sum.textContent = `Summe ${total} %`;
+      adjusted.hidden = !gaveWay.length;
+      adjusted.textContent = gaveWay.length
+        ? `Damit die Summe 100 % bleibt, wurde angepasst: ${gaveWay.map((id) => `${names.get(id)} ${shares.weights[id]} %`).join(', ')}.`
+        : '';
+    };
+    const refresh = (source = null) => {
+      paint(source);
       const next = distribute(shareSize, shares.weights, shareCounts, active.order);
       fillSharePreview(preview, active, next);
       showCount(next.total);
     };
-    // The other decks follow from the shares at the start of the gesture, so
-    // dragging back and forth never loses their proportions to rounding.
+    // One gesture is one slider drag, one typed edit or one tap.  Every step
+    // of it is computed from the shares at its start, so dragging back and
+    // forth never loses proportions to rounding.  What the user set before
+    // stays (rebalance); only memory is touched here.
     const apply = (id, value, source) => {
       const kind = `${source.type}:${id}`;
-      if (!gesture || gesture.kind !== kind) gesture = { kind, weights: { ...shares.weights } };
-      shares.weights = rebalance(gesture.weights, active.order, id, value);
+      if (!gesture || gesture.kind !== kind) {
+        gesture = { kind, weights: { ...shares.weights }, kept: [...marks.kept], edited: shares.drafts.has(active.key), gaveWay };
+      }
+      shares.weights = rebalance(gesture.weights, active.order, id, value, gesture.kept, marks.basis);
       active.weights = shares.weights;
       shares.drafts.set(active.key, shares.weights);
+      // A hand-set deck that had to give way is named below the rows and
+      // follows automatically from now on.
+      marks.kept = keptAfter(gesture.kept, id, gesture.weights, shares.weights);
+      shares.marks.set(active.key, marks);
+      gaveWay = movedDecks(gesture.kept, id, gesture.weights, shares.weights);
       refresh(source);
     };
-    for (const deck of store.decks().filter((item) => active.ids.includes(item.id))) {
+    // A drag the system took away (the page scrolled after all, a call came
+    // in) counts as not made.
+    const revert = () => {
+      if (!gesture) return;
+      shares.weights = gesture.weights;
+      active.weights = shares.weights;
+      if (gesture.edited) shares.drafts.set(active.key, shares.weights);
+      else shares.drafts.delete(active.key);
+      marks.kept = gesture.kept;
+      gaveWay = gesture.gaveWay;
+      gesture = null;
+      refresh();
+    };
+    const even = h('button', { class: 'btn btn-sm btn-ghost weights-even', type: 'button', id: 'learn-weights-even', text: 'Gleichmäßig verteilen' });
+    even.addEventListener('click', () => {
+      gesture = null;
+      shares.weights = equalWeights(active.order);
+      active.weights = shares.weights;
+      shares.drafts.set(active.key, shares.weights);
+      Object.assign(marks, { kept: [], basis: { ...shares.weights } });
+      shares.marks.set(active.key, marks);
+      gaveWay = [];
+      refresh();
+    });
+    section.append(h('p', {
+      class: 'weights-help', id: 'learn-weights-help',
+      text: 'Was du einstellst, bleibt. Den Rest teilen sich die anderen Decks automatisch – die Summe ist immer 100 %.',
+    }));
+    for (const deck of decks) {
       const value = active.weights[deck.id];
       const slider = h('input', {
         type: 'range', class: 'weight-slider', id: `weight-slider-${deck.id}`, min: '0', max: '100', step: '1',
@@ -575,16 +751,39 @@ function renderSetup(view, ctx) {
         settle();
         input.select();
       });
-      rows.set(deck.id, { slider, input });
-      section.append(h('div', { class: 'weight-row', dataset: { deck: deck.id } },
+      // − / + go to the next multiple of five: quick to try, hard to hit by accident.
+      const step = (direction, button) => {
+        const current = shares.weights[deck.id];
+        const next = direction > 0
+          ? Math.min(100, (Math.floor(current / SHARE_STEP) + 1) * SHARE_STEP)
+          : Math.max(0, (Math.ceil(current / SHARE_STEP) - 1) * SHARE_STEP);
+        gesture = null;
+        if (next !== current) apply(deck.id, next, button);
+        gesture = null;
+      };
+      const minus = h('button', { class: 'weight-step', type: 'button', id: `weight-minus-${deck.id}`, 'aria-label': `Anteil ${deck.name} verringern`, text: '−' });
+      const plus = h('button', { class: 'weight-step', type: 'button', id: `weight-plus-${deck.id}`, 'aria-label': `Anteil ${deck.name} erhöhen`, text: '+' });
+      minus.addEventListener('click', () => step(-1, minus));
+      plus.addEventListener('click', () => step(1, plus));
+      const slide = guardSlider(slider, {
+        onStart: () => { gesture = null; },
+        onDrag: (next) => apply(deck.id, next, slider),
+        onDone: () => { gesture = null; },
+        onCancel: revert,
+      });
+      const mode = h('span', { class: 'weight-mode' });
+      const element = h('div', { class: 'weight-row', dataset: { deck: deck.id } },
         h('div', { class: 'weight-head' },
           h('span', { class: 'deck-dot', 'aria-hidden': 'true', vars: { '--deck-color': store.deckColor(deck.id) } }),
-          h('span', { class: 'weight-name', text: deck.name }),
+          h('span', { class: 'weight-label' }, h('span', { class: 'weight-name', text: deck.name }), mode),
           h('span', { class: 'weight-value' }, input, h('span', { 'aria-hidden': 'true', text: '%' }))),
-        slider));
+        h('div', { class: 'weight-control' }, minus, slide, plus));
+      rows.set(deck.id, { element, slider, input, mode, minus, plus });
+      section.append(element);
     }
+    paint();
     fillSharePreview(preview, active, plan);
-    section.append(preview);
+    section.append(h('div', { class: 'weights-foot' }, sum, even), adjusted, preview);
     return section;
   }
 

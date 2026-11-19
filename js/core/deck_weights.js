@@ -109,21 +109,68 @@ export function clampPercent(value) {
 }
 
 /**
- * Set one deck to `value` percent; the other decks share the rest.  They keep
- * their proportions (a deck at 0 stays at 0).  If all of them are at 0, the
- * rest is spread evenly.  The result always sums to 100.
+ * Set one deck to `value` percent; the other decks make up the rest.
+ *
+ * What was set by hand stays: `kept` names the decks whose share the user
+ * chose before, oldest first.  They keep their share as long as the rest
+ * allows it – if it does not, the deck set longest ago gives way first.
+ *
+ * The remaining decks follow automatically.  They split what is left in the
+ * proportions of `basis` (the shares before the editing began; by default
+ * `weights`): a deck at 0 there stays at 0, and if all of them are at 0 the
+ * rest is spread evenly.  If no deck is left to follow, the deck set longest
+ * ago takes the rest.
+ *
+ * The result always sums to 100.  Without `kept` all other decks simply keep
+ * their proportions.
  */
-export function rebalance(weights, order, changed, value) {
+export function rebalance(weights, order, changed, value, kept = [], basis = null) {
   const ids = unique(order);
   const target = String(changed);
   if (!ids.includes(target)) return fitWeights(weights, ids);
   const others = ids.filter((id) => id !== target);
   if (!others.length) return { [target]: TOTAL_PERCENT };
   const own = Math.max(0, Math.min(TOTAL_PERCENT, Math.trunc(Number(value)) || 0));
-  let basis = Object.fromEntries(others.map((id) => [id, share(weights, id)]));
-  if (!others.some((id) => basis[id] > 0)) basis = Object.fromEntries(others.map((id) => [id, 1]));
-  const spread = apportion(TOTAL_PERCENT - own, basis, others);
-  return Object.fromEntries(ids.map((id) => [id, id === target ? own : spread[id]]));
+  let left = TOTAL_PERCENT - own;
+  const result = { [target]: own };
+  const pinned = unique(kept).filter((id) => others.includes(id));
+  for (const id of [...pinned].reverse()) { // the newest choice is honoured first
+    result[id] = Math.min(share(weights, id), left);
+    left -= result[id];
+  }
+  const free = others.filter((id) => !pinned.includes(id));
+  if (free.length) {
+    const source = isRecord(basis) ? basis : weights;
+    let base = Object.fromEntries(free.map((id) => [id, share(source, id)]));
+    if (!free.some((id) => base[id] > 0)) base = Object.fromEntries(free.map((id) => [id, 1]));
+    Object.assign(result, apportion(left, base, free));
+  } else if (left > 0) {
+    const growing = pinned.find((id) => result[id] > 0);
+    if (growing !== undefined) result[growing] += left;
+    else Object.assign(result, apportion(left, Object.fromEntries(others.map((id) => [id, 1])), others));
+  }
+  return Object.fromEntries(ids.map((id) => [id, result[id]]));
+}
+
+const hasOwn = (record, key) => Object.prototype.hasOwnProperty.call(record, key);
+
+/** The hand-set decks a change had to move (see rebalance), oldest first. */
+export function gaveWay(kept, changed, before, after) {
+  const target = String(changed);
+  const now = isRecord(after) ? after : {};
+  return unique(kept).filter((id) => id !== target && hasOwn(now, id) && share(before, id) !== share(now, id));
+}
+
+/**
+ * The hand-set decks once `changed` was set, oldest first.  `changed` is the
+ * newest of them.  A deck that had to give way no longer has the share the
+ * user chose: it follows automatically again.
+ */
+export function keptAfter(kept, changed, before, after) {
+  const target = String(changed);
+  const now = isRecord(after) ? after : {};
+  const moved = gaveWay(kept, target, before, now);
+  return [...unique(kept).filter((id) => id !== target && hasOwn(now, id) && !moved.includes(id)), target];
 }
 
 /**

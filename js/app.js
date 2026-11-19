@@ -31,7 +31,7 @@ import decks from './screens/decks.js';
 import device from './screens/device.js';
 import onboarding, { openConflictSheet, openEmptyCloudSheet, openMovedSheet, openSwitchSheet } from './screens/onboarding.js';
 
-export const APP_VERSION = '2.3.0';
+export const APP_VERSION = '2.3.1';
 
 const TABS = [
   { key: 'start', label: 'Start', icon: 'home', hash: '#/start' },
