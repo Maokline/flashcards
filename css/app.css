@@ -1050,6 +1050,68 @@ a { color: var(--area-text); }
 .learn-start-bar .learn-count { text-align: center; font-size: 13.5px; }
 /* Sheet content scrolls; its rows keep their height instead of shrinking. */
 .sheet-body > .setup-row, .sheet-body > .check-list, .sheet-body > .option-list, .sheet-body > .pick-tools, .sheet-body > .field { flex-shrink: 0; }
+/* Deck shares of a weighted session: switch, one slider with a typed value
+   per deck and the preview of the cards each deck gives. */
+.weights { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.weights .toggle {
+  min-height: 56px; padding: 6px 12px 6px 14px; border-radius: 16px;
+  border: 1.5px solid var(--border-strong); background: var(--surface);
+}
+.weights .toggle-text { min-width: 0; font-weight: 750; overflow-wrap: anywhere; }
+.weight-row { display: flex; flex-direction: column; min-width: 0; padding-top: 6px; }
+.weight-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.weight-name { flex: 1 1 auto; min-width: 0; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.weight-value { flex: none; display: inline-flex; align-items: center; gap: 5px; font-weight: 800; color: var(--area-text); }
+.weight-input {
+  width: 62px; min-height: 44px; padding: 6px 10px; text-align: right;
+  border-radius: 12px; border: 1.5px solid var(--border-strong); background: var(--surface);
+  font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.weight-input:focus { outline: none; border-color: var(--area-accent); box-shadow: 0 0 0 4px var(--area-surface); }
+.weight-input.is-incomplete { border-color: var(--warning); }
+.weight-slider {
+  -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 44px; margin: 0; padding: 0;
+  background: transparent; cursor: pointer; touch-action: pan-y; --thumb: 28px;
+}
+.weight-slider::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--area-strong) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--share, 0)),
+    var(--surface-sunken) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--share, 0)));
+}
+.weight-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: var(--thumb); height: var(--thumb); margin-top: -10px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--area-strong);
+  box-shadow: 0 2px 6px rgba(18, 24, 38, 0.18); transition: transform 0.12s ease;
+}
+.weight-slider:active::-webkit-slider-thumb { transform: scale(1.08); }
+.weight-slider::-moz-range-track { height: 8px; border-radius: 999px; background: var(--surface-sunken); }
+.weight-slider::-moz-range-progress { height: 8px; border-radius: 999px; background: var(--area-strong); }
+.weight-slider::-moz-range-thumb {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--surface); border: 2px solid var(--area-strong);
+  box-shadow: 0 2px 6px rgba(18, 24, 38, 0.18);
+}
+.weight-slider:focus-visible { outline: none; }
+.weight-slider:focus-visible::-webkit-slider-thumb { outline: 3px solid var(--focus); outline-offset: 2px; }
+.weight-slider:focus-visible::-moz-range-thumb { outline: 3px solid var(--focus); outline-offset: 2px; }
+.weights-preview {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-top: 4px; padding: 12px 14px;
+  border-radius: var(--radius); border: 1px solid var(--border); background: var(--area-soft);
+}
+.weights-preview-title { font-size: 13.5px; font-weight: 800; color: var(--area-text); }
+.weights-bar { display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden; background: var(--surface-sunken); }
+.weights-seg { flex: var(--cards, 1) 1 0; min-width: 4px; background: var(--deck-color, var(--area-accent)); }
+.weights-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.weights-table th, .weights-table td { padding: 4px 0; text-align: left; font-weight: 650; vertical-align: middle; }
+.weights-table thead th { font-size: 12px; font-weight: 800; color: var(--muted); }
+.weights-table .num { width: 1%; padding-left: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.weights-table td.num { font-weight: 800; }
+.weights-table td.is-changed { color: var(--warning-text); }
+.weights-deck { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.weights-deck-name { min-width: 0; overflow-wrap: anywhere; }
+.weights-note { font-size: 13px; font-weight: 650; color: var(--warning-text); }
+
 .preset-banner { align-items: center; }
 .preset-banner .spacer { display: flex; flex-direction: column; }
 .preset-sub { font-weight: 550; font-size: 13.5px; overflow-wrap: anywhere; }

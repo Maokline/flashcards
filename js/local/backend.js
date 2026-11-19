@@ -16,6 +16,7 @@ import { apiFields, settingsOf } from '../core/intervals.js';
 import { selectSessionCards } from '../core/selection.js';
 import * as statistics from '../core/statistics.js';
 import { getFocus, setFocus } from '../core/learning_focus.js';
+import { getWeightsDocument, saveWeightsDocument } from '../core/deck_weight_file.js';
 import { localPace } from '../pace.js';
 import { on } from '../bus.js';
 import { utcIso } from '../core/time.js';
@@ -116,6 +117,10 @@ async function route(method, parts, query, json, form) {
   if (area === 'learning-focus' && !rest.length) {
     if (method === 'GET') return getFocus();
     if (method === 'POST') return setFocus(json?.deck_ids ?? null);
+  }
+  if (area === 'deck-weights' && !rest.length) {
+    if (method === 'GET') return getWeightsDocument();
+    if (method === 'POST') return saveWeightsDocument(json?.weights);
   }
   if (area === 'statistics' && rest[0] === 'advanced' && method === 'GET') {
     const deckIds = query.has('deck_ids') ? query.get('deck_ids').split(',').filter(Boolean) : null;

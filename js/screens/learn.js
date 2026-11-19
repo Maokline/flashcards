@@ -11,9 +11,11 @@ import { isCloud } from '../config.js';
 import { cardImages, thumbGrid } from '../images.js';
 import * as store from '../store.js';
 import * as sync from '../sync.js';
+import { clampPercent, combinationIds, distribute, equalWeights, findWeights, fitWeights, isValid, rebalance, selectWeightedSession, tieOrder } from '../core/deck_weights.js';
 import { DEFAULT_ORDER, orderSessionCards } from '../core/selection.js';
+import { readWeights, saveWeights } from '../deck_weights.js';
 import { countIndex, deckSummary, fillCategorySelect, fillSubcategorySelect, normalizeDeckIds, openDeckPicker } from '../pickers.js';
-import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast } from '../ui.js';
+import { choices, confirmDialog, emptyState, field, levelBadge, openSheet, select, toast, toggle } from '../ui.js';
 import { clear, h, icon, plural, pointsText, uuid } from '../util.js';
 
 const LIMITS = [
@@ -34,10 +36,88 @@ const MAX_RETRIES_PER_CARD = 3;
 // The setup's selection: local UI state of this device, never synchronised.
 // deckIds [] = all decks.  `preset` holds the exact card set handed over by
 // the card list ("Diese Karten lernen") until it is changed or used.
-export const filters = { deckIds: [], categoryId: '', subcategoryId: '', dueOnly: true, limit: '20', order: DEFAULT_ORDER, preset: null };
+// `weighted`: "Deck-Anteile selbst festlegen" (off by default).
+export const filters = { deckIds: [], categoryId: '', subcategoryId: '', dueOnly: true, limit: '20', order: DEFAULT_ORDER, preset: null, weighted: false };
 
 let session = null;
 let navigateRef = null;
+
+// -- deck shares of a weighted session ------------------------------------------
+// The shares are edited in memory only.  `drafts` keeps what was set for a
+// deck combination until a session start stores it; `saved` is the
+// synchronised document of stored combinations (js/deck_weights.js).  Nothing
+// is written while a slider moves.
+const shares = { key: '', weights: null, drafts: new Map(), saved: null };
+
+function chosenDeckIds(values) {
+  const ids = values.deckIds.length ? values.deckIds : store.decks().map((deck) => deck.id);
+  return ids.filter((id) => store.deck(id));
+}
+
+/** Shares can be set for two or more decks; a handed-over card set is used as it is. */
+function sharesApplicable(values) {
+  return !values.preset && chosenDeckIds(values).length >= 2;
+}
+
+/**
+ * The deck shares that apply to this setup, or null (switched off, fewer than
+ * two decks).  For a new deck combination: what was set for it in this app
+ * session, else the stored shares, else the previous shares carried over
+ * (decks added or removed), else an even split.
+ */
+function activeShares(values = filters) {
+  if (!values.weighted || !sharesApplicable(values)) return null;
+  const ids = chosenDeckIds(values);
+  const order = tieOrder(ids.map((id) => store.deck(id)));
+  const key = JSON.stringify(combinationIds(ids));
+  if (shares.key !== key || !isValid(shares.weights, order)) {
+    shares.weights = shares.drafts.get(key)
+      || findWeights(shares.saved, ids)
+      || (shares.key && shares.weights ? fitWeights(shares.weights, order) : equalWeights(order));
+    shares.key = key;
+  }
+  return { ids, order, key, weights: shares.weights };
+}
+
+const sameShares = (a, b, ids) => Boolean(a && b) && ids.every((id) => a[id] === b[id]);
+
+/** Take over the stored document; shown shares the user has not touched follow it. */
+function adoptSavedShares(document) {
+  shares.saved = document;
+  if (!shares.key || shares.drafts.has(shares.key)) return false;
+  const ids = JSON.parse(shares.key);
+  const stored = findWeights(document, ids);
+  if (!stored || sameShares(stored, shares.weights, ids)) return false;
+  shares.weights = stored;
+  return true;
+}
+
+/** Session start: store the shares of this deck combination if they changed. */
+function rememberShares(active) {
+  const weights = { ...active.weights };
+  if (sameShares(findWeights(shares.saved, active.ids), weights, active.ids)) {
+    shares.drafts.delete(active.key);
+    return;
+  }
+  saveWeights(weights).then((document) => {
+    shares.saved = document;
+    if (sameShares(shares.drafts.get(active.key), weights, active.ids)) shares.drafts.delete(active.key);
+  }).catch(() => {
+    // Read-only device or no connection: the shares stay in memory for this
+    // app session and the next session start tries again.
+    if (!shares.drafts.has(active.key)) shares.drafts.set(active.key, weights);
+  });
+}
+
+/** The deck shares of the current setup as copies (diagnostics and tests). */
+export function sharesInfo() {
+  const active = activeShares();
+  return {
+    active: active ? { ids: [...active.ids], order: [...active.order], weights: { ...active.weights } } : null,
+    drafts: [...shares.drafts.values()].map((weights) => ({ ...weights })),
+    saved: shares.saved ? structuredClone(shares.saved) : null,
+  };
+}
 
 function vibrate(pattern) {
   try { if (navigator.vibrate) navigator.vibrate(pattern); } catch { /* not supported */ }
@@ -100,6 +180,18 @@ export function arrangeSession(ids, { order = DEFAULT_ORDER, limit = 'all', seed
   const ordered = orderSessionCards(cards, order, { seed, now });
   const count = limit === 'all' || limit === null || limit === undefined ? ordered.length : Math.max(0, Number(limit));
   return ordered.slice(0, count).map((card) => card.id);
+}
+
+/**
+ * A weighted session: every candidate in the chosen order, then each deck up
+ * to its number of cards (js/core/deck_weights.js).  The order still decides
+ * which cards of a deck come first and how the session is arranged.
+ */
+export function arrangeWeightedSession(ids, { order = DEFAULT_ORDER, limit = 'all', seed = 0, now = Date.now(), weights, deckOrder } = {}) {
+  const cards = [...new Set(ids)].map((id) => store.card(id)).filter(Boolean);
+  const size = limit === 'all' || limit === null || limit === undefined ? null : Math.max(0, Number(limit));
+  const { cards: chosen, plan } = selectWeightedSession(cards, { size, weights, deckOrder, mode: order, seed, now });
+  return { ids: chosen.map((card) => card.id), plan };
 }
 
 export function startWithIds(ids, navigate, config = null) {
@@ -201,7 +293,13 @@ async function startFromFilters(values, navigate, button) {
     const ids = await candidateIds(values);
     const seed = randomSeed();
     const now = Date.now();
-    const chosen = arrangeSession(ids, { order: values.order, limit: values.limit, seed, now });
+    // Deck shares only decide how many cards each deck gives; without them
+    // the selection is exactly the previous one.
+    const active = activeShares(values);
+    const weighted = active
+      ? arrangeWeightedSession(ids, { order: values.order, limit: values.limit, seed, now, weights: active.weights, deckOrder: active.order })
+      : null;
+    const chosen = weighted ? weighted.ids : arrangeSession(ids, { order: values.order, limit: values.limit, seed, now });
     if (!chosen.length) {
       toast(values.dueOnly && !values.preset ? 'Keine fälligen Karten für diese Auswahl.' : 'Keine Karten für diese Auswahl.');
       return false;
@@ -217,10 +315,20 @@ async function startFromFilters(values, navigate, button) {
       startedAt: new Date(now).toISOString(),
       fromCardList: Boolean(values.preset),
       candidates: ids.length,
+      // Copies that belong to this session: changing the shares later never
+      // reaches a running session, and resuming does not distribute again.
+      weights: active ? Object.freeze({ ...active.weights }) : null,
+      distribution: weighted ? Object.freeze({
+        requested: weighted.plan.requested,
+        total: weighted.plan.total,
+        desired: Object.freeze({ ...weighted.plan.desired }),
+        actual: Object.freeze({ ...weighted.plan.actual }),
+      }) : null,
     };
     const ok = startWithIds(chosen, navigate, config);
     // The handed-over card set is used once; afterwards the filters apply.
     if (ok) values.preset = null;
+    if (ok && active) rememberShares(active);
     return ok;
   } catch (error) {
     toast(error.message || 'Session konnte nicht gestartet werden.', { tone: 'error' });
@@ -326,6 +434,166 @@ function renderSetup(view, ctx) {
     draw();
   };
 
+  // -- deck shares ("Deck-Anteile selbst festlegen") -------------------------
+  // Moving a slider only recomputes the distribution from the counts of the
+  // last draw: no pass over the cards, no rebuild of the form, nothing stored.
+  let alive = true;
+  let shareCounts = {};   // eligible cards per chosen deck (last draw)
+  let shareSize = 0;      // cards the session asks for (number or all)
+  let foundCards = 0;     // candidates of the last draw
+  let gesture = null;     // shares when a slider drag or a typed edit began
+
+  function showCount(planned) {
+    countEl.classList.toggle('is-empty', !foundCards);
+    countEl.textContent = foundCards
+      ? `${plural(foundCards, 'Karte', 'Karten')} gefunden · Session: ${plural(planned, 'Karte', 'Karten')}`
+      : (filters.dueOnly && !filters.preset ? 'Keine fälligen Karten in dieser Auswahl.' : 'Keine Karten in dieser Auswahl.');
+  }
+
+  function deckAvailability(ids, scoped) {
+    const counts = Object.fromEntries(ids.map((id) => [id, 0]));
+    if (filters.categoryId) {
+      // A category belongs to exactly one deck.
+      const category = store.state.categories.get(filters.categoryId);
+      const count = filters.subcategoryId ? scoped.subcategories.get(filters.subcategoryId) : scoped.categories.get(filters.categoryId);
+      if (category && category.deck_id in counts) counts[category.deck_id] = count || 0;
+    } else {
+      for (const id of ids) counts[id] = scoped.decks.get(id) || 0;
+    }
+    return counts;
+  }
+
+  function fillSharePreview(host, active, plan) {
+    const decks = store.decks().filter((deck) => active.ids.includes(deck.id));
+    const everything = filters.limit === 'all';
+    const differs = !everything && active.order.some((id) => plan.desired[id] !== plan.actual[id]);
+    const idle = active.order.some((id) => !active.weights[id] && shareCounts[id] > 0);
+    let note = '';
+    if (everything) note = 'Bei „Alle“ kommen alle geeigneten Karten in die Session – die Anteile wirken bei einer festen Anzahl.';
+    else if (plan.total < plan.requested) note = plan.total ? `Nur ${plural(plan.total, 'geeignete Karte', 'geeignete Karten')} verfügbar.` : 'Keine geeigneten Karten verfügbar.';
+    else if (differs) note = 'Nicht jedes Deck hat genug geeignete Karten – freie Plätze gehen nach den Anteilen an die anderen Decks.';
+    if (idle && (everything || plan.total < plan.requested)) note += ' Decks mit 0 % liefern keine Karten.';
+    const cell = (value, extra = '') => h('td', { class: `num${extra}`, text: differs ? String(value) : plural(value, 'Karte', 'Karten') });
+    clear(host);
+    host.append(...[
+      h('p', { class: 'weights-preview-title', id: 'learn-weights-title', text: `Voraussichtliche Verteilung – ${plural(plan.total, 'Karte', 'Karten')}` }),
+      h('div', {
+        class: 'weights-bar', id: 'learn-weights-bar', role: 'img',
+        'aria-label': decks.map((deck) => `${deck.name}: ${plural(plan.actual[deck.id], 'Karte', 'Karten')}`).join(', '),
+      }, decks.filter((deck) => plan.actual[deck.id] > 0).map((deck) => h('span', {
+        class: 'weights-seg', dataset: { deck: deck.id },
+        vars: { '--cards': String(plan.actual[deck.id]), '--deck-color': store.deckColor(deck.id) },
+      }))),
+      h('table', { class: 'weights-table', id: 'learn-weights-table' },
+        h('thead', { class: differs ? '' : 'visually-hidden' }, h('tr', {},
+          h('th', { scope: 'col', text: 'Deck' }),
+          differs ? [h('th', { scope: 'col', class: 'num', text: 'Gewünscht' }), h('th', { scope: 'col', class: 'num', text: 'Tatsächlich' })] : h('th', { scope: 'col', class: 'num', text: 'Karten' }))),
+        h('tbody', {}, decks.map((deck) => h('tr', { dataset: { deck: deck.id, desired: plan.desired[deck.id], actual: plan.actual[deck.id] } },
+          h('th', { scope: 'row' }, h('span', { class: 'weights-deck' },
+            h('span', { class: 'deck-dot', 'aria-hidden': 'true', vars: { '--deck-color': store.deckColor(deck.id) } }),
+            h('span', { class: 'weights-deck-name', text: deck.name }))),
+          differs ? cell(plan.desired[deck.id]) : null,
+          cell(plan.actual[deck.id], differs && plan.actual[deck.id] !== plan.desired[deck.id] ? ' is-changed' : ''))))),
+      note ? h('p', { class: 'weights-note', id: 'learn-weights-note', text: note }) : null,
+    ].filter(Boolean));
+  }
+
+  function weightsSection(active, plan) {
+    if (!sharesApplicable(filters)) return null;
+    const control = toggle('Deck-Anteile selbst festlegen', filters.weighted, { id: 'learn-weighted' });
+    control.input.addEventListener('change', () => {
+      filters.weighted = control.input.checked;
+      // Switching on again starts from the stored (or even) shares.
+      if (!filters.weighted) Object.assign(shares, { key: '', weights: null });
+      draw();
+      if (filters.weighted) loadShares();
+    });
+    const section = h('section', { class: 'weights', id: 'learn-weights', 'aria-labelledby': 'learn-weights-label' },
+      h('span', { class: 'field-label', id: 'learn-weights-label', text: 'Deck-Gewichtung' }),
+      control.element);
+    if (!active) return section;
+
+    const rows = new Map();
+    const preview = h('div', { class: 'weights-preview', id: 'learn-weights-preview' });
+    const refresh = (source = null) => {
+      for (const [id, row] of rows) {
+        const value = shares.weights[id];
+        row.slider.value = String(value);
+        row.slider.style.setProperty('--share', String(value / 100));
+        row.slider.setAttribute('aria-valuetext', `${value} %`);
+        if (row.input !== source) {
+          row.input.value = String(value);
+          row.input.classList.remove('is-incomplete');
+        }
+      }
+      const next = distribute(shareSize, shares.weights, shareCounts, active.order);
+      fillSharePreview(preview, active, next);
+      showCount(next.total);
+    };
+    // The other decks follow from the shares at the start of the gesture, so
+    // dragging back and forth never loses their proportions to rounding.
+    const apply = (id, value, source) => {
+      const kind = `${source.type}:${id}`;
+      if (!gesture || gesture.kind !== kind) gesture = { kind, weights: { ...shares.weights } };
+      shares.weights = rebalance(gesture.weights, active.order, id, value);
+      active.weights = shares.weights;
+      shares.drafts.set(active.key, shares.weights);
+      refresh(source);
+    };
+    for (const deck of store.decks().filter((item) => active.ids.includes(item.id))) {
+      const value = active.weights[deck.id];
+      const slider = h('input', {
+        type: 'range', class: 'weight-slider', id: `weight-slider-${deck.id}`, min: '0', max: '100', step: '1',
+        'aria-label': `Anteil ${deck.name} in Prozent`, 'aria-valuetext': `${value} %`, dataset: { deck: deck.id },
+        vars: { '--share': String(value / 100) },
+      });
+      slider.value = String(value);
+      // Typed values may be incomplete for a moment ("", "1" on the way to
+      // "15"): they only apply once they are a number and settle on leaving.
+      const input = h('input', {
+        type: 'text', class: 'weight-input', id: `weight-input-${deck.id}`, inputmode: 'numeric', pattern: '[0-9]*', maxlength: '3',
+        autocomplete: 'off', 'aria-label': `Anteil ${deck.name} in Prozent eingeben`, dataset: { deck: deck.id }, value: String(value),
+      });
+      const settle = () => {
+        gesture = null;
+        input.value = String(shares.weights[deck.id]);
+        input.classList.remove('is-incomplete');
+      };
+      slider.addEventListener('input', () => apply(deck.id, Number(slider.value), slider));
+      slider.addEventListener('change', () => { gesture = null; });
+      input.addEventListener('focus', () => { gesture = null; input.select(); });
+      input.addEventListener('input', () => {
+        const typed = clampPercent(input.value);
+        input.classList.toggle('is-incomplete', typed === null);
+        if (typed !== null) apply(deck.id, typed, input);
+      });
+      input.addEventListener('change', settle);
+      input.addEventListener('blur', settle);
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        settle();
+        input.select();
+      });
+      rows.set(deck.id, { slider, input });
+      section.append(h('div', { class: 'weight-row', dataset: { deck: deck.id } },
+        h('div', { class: 'weight-head' },
+          h('span', { class: 'deck-dot', 'aria-hidden': 'true', vars: { '--deck-color': store.deckColor(deck.id) } }),
+          h('span', { class: 'weight-name', text: deck.name }),
+          h('span', { class: 'weight-value' }, input, h('span', { 'aria-hidden': 'true', text: '%' }))),
+        slider));
+    }
+    fillSharePreview(preview, active, plan);
+    section.append(preview);
+    return section;
+  }
+
+  // Stored shares are only read while the option is in use; they are
+  // optional, the setup works without them.
+  const loadShares = () => readWeights()
+    .then((document) => { if (adoptSavedShares(document) && alive && filters.weighted) draw(); })
+    .catch(() => {});
+
   function draw() {
     const dueAll = store.localOverview().due_cards;
     heroTitle.textContent = dueAll ? `${dueAll} fällig` : 'Alles erledigt';
@@ -351,7 +619,17 @@ function renderSetup(view, ctx) {
       : filters.subcategoryId ? scoped.subcategories.get(filters.subcategoryId) || 0
         : filters.categoryId ? scoped.categories.get(filters.categoryId) || 0
           : scoped.total;
-    const planned = plannedSessionSize(available);
+    // Deck shares: wanted and possible cards per deck for this very selection.
+    gesture = null;
+    foundCards = available;
+    const sharing = activeShares(filters);
+    let plan = null;
+    if (sharing) {
+      shareCounts = deckAvailability(sharing.ids, scoped);
+      shareSize = filters.limit === 'all' ? available : Math.max(0, Number(filters.limit) || 0);
+      plan = distribute(shareSize, sharing.weights, shareCounts, sharing.order);
+    }
+    const planned = plan ? plan.total : plannedSessionSize(available);
     const decks = deckSummary(filters.deckIds);
     const order = ORDERS.find((item) => item.value === filters.order) || ORDERS[0];
 
@@ -372,13 +650,15 @@ function renderSetup(view, ctx) {
       ? (active.id ? `#${CSS.escape(active.id)}` : active.dataset.value !== undefined ? `.choice[data-value="${CSS.escape(active.dataset.value)}"]` : '')
       : '';
     clear(form);
-    form.append(
+    form.append(...[
       setupRow({
         id: 'learn-decks', label: 'Decks', value: decks.main, valueId: 'learn-decks-value', sub: decks.sub,
         action: ['Auswählen', icon('chevron-right', 'icon-sm')],
         disabled: !store.state.decks.size,
         onClick: () => openDeckPicker({ selected: filters.deckIds, counts: deckCounts, onDone: (ids) => changed({ deckIds: ids }) }),
       }),
+      // Directly below the decks; only for two or more decks.
+      weightsSection(sharing, plan),
       field('Kategorie', categorySelect),
       field('Unterkategorie', subcategorySelect),
       h('div', { class: 'field' },
@@ -393,15 +673,14 @@ function renderSetup(view, ctx) {
         id: 'learn-order', label: 'Reihenfolge', value: order.label, valueId: 'learn-order-value', sub: order.sub,
         action: icon('chevron-down', 'icon-sm'),
         onClick: () => openOrderSheet(filters.order, (value) => { filters.order = value; draw(); }),
-      }));
+      }),
+    ].filter(Boolean));
     if (focusKey) form.querySelector(focusKey)?.focus({ preventScroll: true });
     // The count sits next to the start button, so both stay in view.
-    countEl.classList.toggle('is-empty', !available);
-    countEl.textContent = available
-      ? `${plural(available, 'Karte', 'Karten')} gefunden · Session: ${plural(planned, 'Karte', 'Karten')}`
-      : (filters.dueOnly && !filters.preset ? 'Keine fälligen Karten in dieser Auswahl.' : 'Keine Karten in dieser Auswahl.');
+    showCount(planned);
   }
   draw();
+  if (filters.weighted) loadShares();
 
   view.append(h('div', { class: 'stack-lg' },
     h('section', { class: 'hero hero-compact' },
@@ -418,8 +697,9 @@ function renderSetup(view, ctx) {
       h('span', { class: 'stat-icon tone-mint' }, icon('target')),
       h('span', { class: 'menu-item-text' }, 'KI-Test erstellen', h('span', { class: 'menu-item-sub', text: 'HTML-Datei für ChatGPT & Co. erzeugen und teilen' })),
       icon('chevron-right'))));
-  // Card data arriving through a sync only refreshes the counts.
-  return { onData: draw };
+  // Card data arriving through a sync only refreshes the counts (and the
+  // stored deck shares, which travel with the same sync).
+  return { cleanup: () => { alive = false; }, onData: () => { draw(); if (filters.weighted) loadShares(); } };
 }
 
 // -- session -------------------------------------------------------------------

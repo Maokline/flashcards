@@ -11,7 +11,7 @@
 
 // The sync server and tools/build_pwa.py replace this value with a content
 // hash of all app files, so every release is a new service worker version.
-const VERSION = '1c4c069a9368';
+const VERSION = 'a47e0762da20';
 const SHELL_CACHE = `fc-shell-${VERSION}`;
 const MEDIA_CACHE = 'fc-media-v1';
 const MEDIA_LIMIT = 600;
@@ -35,6 +35,8 @@ const PRECACHE = [
   'js/core/advanced_statistics.js',
   'js/core/canonical.js',
   'js/core/dataset.js',
+  'js/core/deck_weight_file.js',
+  'js/core/deck_weights.js',
   'js/core/engine.js',
   'js/core/intervals.js',
   'js/core/learning_focus.js',
@@ -44,6 +46,7 @@ const PRECACHE = [
   'js/core/statistics.js',
   'js/core/time.js',
   'js/db.js',
+  'js/deck_weights.js',
   'js/gdrive/auth.js',
   'js/gdrive/drive.js',
   'js/gdrive/store.js',
